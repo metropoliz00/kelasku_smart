@@ -16,6 +16,10 @@ Aplikasi **KELASKU SMART** sudah dikonfigurasi agar siap di-deploy ke **GitHub P
 6. Di bagian atas editor Apps Script, pilih fungsi `setupDatabase` pada dropdown fungsi, lalu klik **Run** (Jalankan) satu kali:
    - Saat muncul permintaan izin akses Google Spreadsheet, klik **Review permissions → Pilih akun Google Anda → Advanced → Go to KELASKU SMART API (unsafe) → Allow**.
    - Fungsi ini otomatis membuat **21 sheet** beserta header kolom resmi (termasuk format 2 baris Data Siswa dan kolom foto Base64) tanpa menghapus data lama dan tanpa data dummy.
+   - Jika belum ada akun Administrator aktif, sistem otomatis membuat akun Admin awal di sheet `USERS` dengan kredensial:
+     - **Username**: `admin`
+     - **Password**: `admin123`
+   - Anda juga dapat menjalankan fungsi `buatAkunAdmin` kapan saja dari dropdown fungsi GAS untuk membuat atau mereset akun `admin` / `admin123` (segera ubah password setelah berhasil masuk melalui menu **Manajemen Pengguna**).
 7. Klik tombol **Deploy → New deployment**:
    - **Select type**: `Web app`
    - **Description**: `KELASKU SMART API v1`

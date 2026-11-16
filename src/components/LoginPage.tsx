@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
+  Database,
   Eye,
   EyeOff,
   Loader2,
@@ -43,6 +44,7 @@ export function LoginPage({
 
   const [connModalOpen, setConnModalOpen] = useState(false);
   const [gasUrlInput, setGasUrlInput] = useState(getConfiguredGasUrl());
+  const [connDiagnostic, setConnDiagnostic] = useState('');
 
   // First-time Admin registration (only when DB has 0 users)
   const [initModalOpen, setInitModalOpen] = useState(false);
@@ -58,6 +60,7 @@ export function LoginPage({
     if (currentMode === 'UNCONFIGURED') {
       setNeedsInitialAdmin(false);
       setSchoolName('');
+      setConnDiagnostic('Database belum dihubungkan.');
       return;
     }
 
@@ -66,13 +69,22 @@ export function LoginPage({
       status: string;
       needs_initial_admin: boolean;
       nama_sekolah?: string;
+      gas_version?: string;
+      user_count?: number;
     }>('ping');
     setCheckingConn(false);
     if (res.success && res.data) {
       setNeedsInitialAdmin(!!res.data.needs_initial_admin);
       setSchoolName((res.data.nama_sekolah || '').trim());
+      if (currentMode === 'GAS') {
+        const verNote = res.data.gas_version ? ' (Code.gs terbaru aktif)' : ' (Versi Code.gs lama — perbarui deployment)';
+        setConnDiagnostic(`Terhubung ke Google Apps Script${verNote}`);
+      } else {
+        setConnDiagnostic('Mode Browser Lokal aktif.');
+      }
     } else {
       setSchoolName('');
+      setConnDiagnostic(res.message || 'Gagal terhubung ke database.');
     }
   };
 
@@ -124,19 +136,20 @@ export function LoginPage({
     }
     setConfiguredGasUrl(gasUrlInput.trim());
     onConnectionChange();
-    setConnModalOpen(false);
     onToast?.('success', 'Koneksi Tersimpan', 'Menghubungkan ke database sekolah...');
     await checkDatabaseStatus();
   };
 
   const handleSetupSheets = async () => {
     setCheckingConn(true);
-    const res = await callApi<{ needs_initial_admin: boolean }>('setupDatabase');
+    const res = await callApi<{ needs_initial_admin: boolean; default_admin_created?: boolean }>('setupDatabase');
     setCheckingConn(false);
     if (res.success) {
       setNeedsInitialAdmin(!!res.data?.needs_initial_admin);
-      onToast?.('success', 'Struktur Database Siap', 'Struktur database berhasil diinisialisasi.');
+      setConnDiagnostic('Struktur 21 sheet & akun admin (admin / admin123) siap digunakan.');
+      onToast?.('success', 'Struktur Database Siap', 'Struktur database & akun admin awal berhasil diverifikasi.');
     } else {
+      setConnDiagnostic(res.message);
       onToast?.('error', 'Inisialisasi Gagal', res.message);
     }
   };
@@ -277,6 +290,27 @@ export function LoginPage({
           <PrimaryButton type="submit" loading={loading} className="w-full py-2.5">
             {loading ? 'Memverifikasi...' : 'Masuk'}
           </PrimaryButton>
+
+          <div className="pt-2 flex items-center justify-between text-xs text-[#64748B]">
+            <span className="truncate">
+              {mode === 'GAS'
+                ? 'Database: Google Apps Script'
+                : mode === 'LOCAL'
+                ? 'Mode: Browser Lokal'
+                : 'Database belum terhubung'}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setGasUrlInput(getConfiguredGasUrl());
+                setConnModalOpen(true);
+              }}
+              className="inline-flex items-center gap-1.5 font-semibold text-[#6D28D9] hover:text-[#4C1D95] shrink-0 cursor-pointer"
+            >
+              <Database className="w-3.5 h-3.5" />
+              Atur Koneksi
+            </button>
+          </div>
         </form>
       </div>
 
@@ -285,10 +319,16 @@ export function LoginPage({
         open={connModalOpen}
         onClose={() => setConnModalOpen(false)}
         title="Pengaturan Koneksi Backend"
-        subtitle="Hubungkan aplikasi ke Google Apps Script Web App atau gunakan Mode Lokal kosong untuk pengujian."
+        subtitle="Hubungkan aplikasi ke Google Apps Script Web App atau gunakan Mode Lokal."
         maxWidth="max-w-lg"
       >
         <div className="space-y-5">
+          {connDiagnostic && (
+            <div className="p-3 rounded-lg bg-slate-50 border border-[#E5E7EB] text-xs text-[#1E1B4B]">
+              <strong>Status:</strong> {connDiagnostic}
+            </div>
+          )}
+
           <div>
             <label className="block text-xs font-semibold text-[#1E1B4B] mb-1.5">
               URL Google Apps Script Web App
@@ -301,16 +341,16 @@ export function LoginPage({
               className="w-full px-3.5 py-2.5 text-sm border border-[#E5E7EB] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#6D28D9]"
             />
             <p className="mt-1.5 text-xs text-[#64748B]">
-              Deploy file <code className="bg-slate-100 px-1 rounded">gas-backend/Code.gs</code>{' '}
-              sebagai Web App (Execute as: Me, Who has access: Anyone), lalu tempel URL-nya di sini
-              atau di file <code className="bg-slate-100 px-1 rounded">config.js</code>.
+              Deploy <code className="bg-slate-100 px-1 rounded">gas-backend/Code.gs</code> sebagai
+              Web App (Execute as: Me, Who has access: Anyone). Jika mengubah kode di GAS, wajib
+              pilih <strong>Manage deployments → Edit → New version → Deploy</strong>.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
-            <PrimaryButton onClick={handleSaveGasUrl}>
+            <PrimaryButton onClick={handleSaveGasUrl} loading={checkingConn}>
               <CheckCircle2 className="w-4 h-4" />
-              Simpan & Hubungkan Database
+              Simpan & Cek Koneksi
             </PrimaryButton>
             {mode === 'GAS' && (
               <SecondaryButton onClick={handleSetupSheets} disabled={checkingConn}>

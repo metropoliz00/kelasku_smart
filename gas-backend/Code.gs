@@ -14,6 +14,12 @@
  * ============================================================================
  */
 
+var DEFAULT_ADMIN_CONFIG = {
+  username: 'admin',
+  password: 'admin123',
+  nama_lengkap: 'Administrator Sekolah'
+};
+
 var SHEETS_SCHEMA = {
   USERS: [
     'id_user', 'username', 'password', 'nama_lengkap', 'role',
@@ -247,9 +253,10 @@ function getSpreadsheet_() {
 
 /**
  * Setup struktur 21 sheet tanpa menghapus data yang ada dan tanpa data dummy.
+ * Otomatis membuat akun ADMIN default (admin / admin123) jika belum ada admin aktif.
  * Aman dijalankan berulang kali.
  */
-function setupDatabase() {
+function setupDatabase(skipDefaultAdmin) {
   var ss = getSpreadsheet_();
   var sheetNames = Object.keys(SHEETS_SCHEMA);
   var created = [];
@@ -298,11 +305,100 @@ function setupDatabase() {
     }
   }
 
+  var defaultAdminCreated = false;
+  if (!skipDefaultAdmin) {
+    defaultAdminCreated = !!ensureDefaultAdmin_();
+  }
+
   return {
     created_sheets: created,
     verified_sheets: verified,
-    total_sheets: sheetNames.length
+    total_sheets: sheetNames.length,
+    default_admin_created: defaultAdminCreated
   };
+}
+
+/**
+ * Memastikan minimal ada 1 akun ADMIN aktif di sheet USERS.
+ * Jika belum ada, otomatis membuat akun default (admin / admin123).
+ */
+function ensureDefaultAdmin_() {
+  var users = readSheetObjects_('USERS');
+  var hasActiveAdmin = users.some(function(u) {
+    var role = String(u.role || '').trim().toUpperCase();
+    var status = String(u.status || 'Aktif').trim().toLowerCase();
+    var uname = String(u.username || '').trim();
+    var pwd = String(u.password !== undefined && u.password !== null ? u.password : '').trim();
+    return role === 'ADMIN' && status === 'aktif' && uname !== '' && pwd !== '';
+  });
+  if (hasActiveAdmin) {
+    return null;
+  }
+
+  var now = nowIso_();
+  var defaultAdmin = {
+    id_user: generateId_('USR'),
+    username: DEFAULT_ADMIN_CONFIG.username,
+    password: DEFAULT_ADMIN_CONFIG.password,
+    nama_lengkap: DEFAULT_ADMIN_CONFIG.nama_lengkap,
+    role: 'ADMIN',
+    relasi_id: '',
+    relasi_nama: 'Administrator Sekolah',
+    status: 'Aktif',
+    foto_url: '',
+    created_at: now,
+    updated_at: now
+  };
+  insertRow_('USERS', defaultAdmin);
+  return sanitizeUser_(defaultAdmin);
+}
+
+/**
+ * Fungsi khusus untuk dijalankan manual dari Editor Google Apps Script
+ * (Pilih fungsi "buatAkunAdmin" -> klik Run) guna membuat atau mereset
+ * akun Administrator default (username: admin, password: admin123).
+ */
+function buatAkunAdmin() {
+  setupDatabase(true);
+  var users = readSheetObjects_('USERS');
+  var existingAdmin = null;
+  for (var i = 0; i < users.length; i++) {
+    if (String(users[i].username || '').trim().toLowerCase() === DEFAULT_ADMIN_CONFIG.username.toLowerCase()) {
+      existingAdmin = users[i];
+      break;
+    }
+  }
+  var now = nowIso_();
+  if (existingAdmin && String(existingAdmin.id_user || '').trim() !== '') {
+    var updated = updateRowById_('USERS', 'id_user', existingAdmin.id_user, {
+      username: DEFAULT_ADMIN_CONFIG.username,
+      password: DEFAULT_ADMIN_CONFIG.password,
+      nama_lengkap: existingAdmin.nama_lengkap || DEFAULT_ADMIN_CONFIG.nama_lengkap,
+      role: 'ADMIN',
+      relasi_nama: existingAdmin.relasi_nama || 'Administrator Sekolah',
+      status: 'Aktif',
+      updated_at: now
+    });
+    Logger.log('Akun ADMIN berhasil diperbarui/diaktifkan. Username: ' + DEFAULT_ADMIN_CONFIG.username + ' | Password: ' + DEFAULT_ADMIN_CONFIG.password);
+    return sanitizeUser_(updated);
+  }
+
+  var newAdmin = {
+    id_user: generateId_('USR'),
+    username: DEFAULT_ADMIN_CONFIG.username,
+    password: DEFAULT_ADMIN_CONFIG.password,
+    nama_lengkap: DEFAULT_ADMIN_CONFIG.nama_lengkap,
+    role: 'ADMIN',
+    relasi_id: '',
+    relasi_nama: 'Administrator Sekolah',
+    status: 'Aktif',
+    foto_url: '',
+    created_at: now,
+    updated_at: now
+  };
+  insertRow_('USERS', newAdmin);
+  Logger.log('Akun ADMIN berhasil dibuat. Username: ' + DEFAULT_ADMIN_CONFIG.username + ' | Password: ' + DEFAULT_ADMIN_CONFIG.password);
+  return sanitizeUser_(newAdmin);
 }
 
 /**
@@ -334,11 +430,14 @@ function doPost(e) {
 
     // Endpoint publik sebelum login
     if (action === 'ping') {
-      var userCount = readSheetObjects_('USERS').length;
+      var usersList = readSheetObjects_('USERS');
+      var userCount = usersList.length;
       var schoolInfo = getSchoolSettingsData_();
       return jsonResponse_(true, 'Terhubung ke Google Spreadsheet.', {
         status: 'connected',
         needs_initial_admin: userCount === 0,
+        user_count: userCount,
+        gas_version: '2026-admin-ready',
         nama_sekolah: String(schoolInfo.nama_sekolah || '').trim(),
         timestamp: nowIso_()
       });
@@ -352,7 +451,7 @@ function doPost(e) {
     }
 
     if (action === 'checkInitialSetup') {
-      setupDatabase();
+      setupDatabase(true);
       var existingUsers = readSheetObjects_('USERS');
       return jsonResponse_(true, 'Status inisialisasi berhasil diperiksa.', {
         needs_initial_admin: existingUsers.length === 0
@@ -360,7 +459,7 @@ function doPost(e) {
     }
 
     if (action === 'createInitialAdmin') {
-      setupDatabase();
+      setupDatabase(true);
       var currentUsers = readSheetObjects_('USERS');
       if (currentUsers.length > 0) {
         return jsonResponse_(false, 'Akun administrator awal sudah terdaftar. Silakan login.', null, 'ALREADY_INITIALIZED');
@@ -708,7 +807,7 @@ function routeAuthenticatedAction_(action, payload, user, token) {
 function handleLogin_(payload) {
   setupDatabase();
   var username = String(payload.username || '').trim();
-  var password = String(payload.password || '');
+  var password = String(payload.password || '').trim();
 
   if (!username || !password) {
     return jsonResponse_(false, 'Username dan password wajib diisi.', null, 'VALIDATION_ERROR');
@@ -717,18 +816,26 @@ function handleLogin_(payload) {
   var users = readSheetObjects_('USERS');
   var found = null;
   for (var i = 0; i < users.length; i++) {
-    if (String(users[i].username).trim() === username) {
+    if (String(users[i].username || '').trim().toLowerCase() === username.toLowerCase()) {
       found = users[i];
       break;
     }
   }
 
-  if (!found || String(found.password) !== password) {
+  var storedPassword = found && found.password !== undefined && found.password !== null
+    ? String(found.password).trim()
+    : '';
+  if (!found || storedPassword !== password) {
     return jsonResponse_(false, 'Username atau password tidak sesuai.', null, 'INVALID_CREDENTIALS');
   }
 
-  if (found.status !== 'Aktif') {
+  var statusVal = String(found.status || 'Aktif').trim().toLowerCase();
+  if (statusVal !== 'aktif') {
     return jsonResponse_(false, 'Akun pengguna sedang dinonaktifkan. Hubungi Administrator.', null, 'ACCOUNT_INACTIVE');
+  }
+
+  if (!found.id_user) {
+    found.id_user = generateId_('USR');
   }
 
   var token = Utilities.getUuid();
@@ -1633,6 +1740,14 @@ function resolveSheetLayout_(sheetName, values) {
       };
     }
   }
+  if (sheetName === 'USERS') {
+    return {
+      fields: row0.map(function(h) {
+        return String(h || '').trim().toLowerCase().replace(/\s+/g, '_');
+      }),
+      dataStartRow: 1
+    };
+  }
   return {
     fields: row0,
     dataStartRow: 1
@@ -1721,6 +1836,14 @@ function insertRow_(sheetName, obj) {
       headers = existingRow0;
     } else if (sheetName === 'GURU' && String(existingRow0[0] || '').trim() === 'id_guru') {
       headers = existingRow0;
+    } else if (sheetName !== 'SISWA' && sheetName !== 'GURU') {
+      var hasAnyHeader = existingRow0.some(function(h) { return String(h || '').trim() !== ''; });
+      if (hasAnyHeader) {
+        headers = existingRow0.map(function(h) {
+          var clean = String(h || '').trim();
+          return sheetName === 'USERS' ? clean.toLowerCase().replace(/\s+/g, '_') : clean;
+        });
+      }
     }
   }
   var row = headers.map(function(h) {

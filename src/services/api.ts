@@ -234,7 +234,36 @@ function handleLocalApi<T>(action: string, payload: Record<string, unknown> = {}
   const session = getStoredSession();
   const now = new Date().toISOString();
 
+  const ensureLocalDefaultAdmin = () => {
+    const hasValidAdmin = db.USERS.some(
+      (u) =>
+        String(u.role || '').trim().toUpperCase() === 'ADMIN' &&
+        String(u.status || 'Aktif').trim().toLowerCase() === 'aktif' &&
+        String(u.username || '').trim() !== '' &&
+        String(u.password || '').trim() !== ''
+    );
+    if (hasValidAdmin) return false;
+    db.USERS.push({
+      id_user: genId('USR'),
+      username: 'admin',
+      password: 'admin123',
+      nama_lengkap: 'Administrator Sekolah',
+      role: 'ADMIN',
+      relasi_id: '',
+      relasi_nama: 'Administrator Sekolah',
+      status: 'Aktif',
+      foto_url: '',
+      created_at: now,
+      updated_at: now,
+    });
+    saveLocalDb(db);
+    return true;
+  };
+
   if (action === 'ping' || action === 'checkInitialSetup' || action === 'setupDatabase') {
+    if (action === 'setupDatabase') {
+      ensureLocalDefaultAdmin();
+    }
     return {
       success: true,
       message: 'Mode Penyimpanan Browser Lokal aktif (Belum terhubung Database).',
@@ -278,13 +307,16 @@ function handleLocalApi<T>(action: string, payload: Record<string, unknown> = {}
   }
 
   if (action === 'loginUser') {
+    ensureLocalDefaultAdmin();
     const username = String(payload.username || '').trim();
-    const password = String(payload.password || '');
-    const found = db.USERS.find((u) => u.username === username);
-    if (!found || found.password !== password) {
+    const password = String(payload.password || '').trim();
+    const found = db.USERS.find(
+      (u) => String(u.username || '').trim().toLowerCase() === username.toLowerCase()
+    );
+    if (!found || String(found.password || '').trim() !== password) {
       return { success: false, message: 'Username atau password tidak sesuai.' };
     }
-    if (found.status !== 'Aktif') {
+    if (String(found.status || 'Aktif').trim().toLowerCase() !== 'aktif') {
       return { success: false, message: 'Akun pengguna sedang dinonaktifkan.' };
     }
     const authUser = sanitizeUser(found);
