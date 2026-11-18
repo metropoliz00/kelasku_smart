@@ -58,10 +58,9 @@ jobs:
       - name: Build frontend & paket installer Windows (.exe)
         env:
           VITE_GAS_WEB_APP_URL: ${{ vars.VITE_GAS_WEB_APP_URL }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run desktop:publish
+        run: npm run desktop:build
 
-      - name: Upload file .exe sebagai artefak workflow
+      - name: Unggah artefak build .exe
         uses: actions/upload-artifact@v4
         with:
           name: kelasku-smart-windows-${{ env.RELEASE_VERSION }}
@@ -69,3 +68,17 @@ jobs:
             release/*.exe
             release/latest.yml
           if-no-files-found: error
+
+      - name: Publikasikan ke GitHub Releases secara otomatis
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v*') || github.event_name == 'workflow_dispatch'
+        with:
+          tag_name: v${{ env.RELEASE_VERSION }}
+          name: KELASKU SMART v${{ env.RELEASE_VERSION }}
+          files: |
+            release/*.exe
+            release/latest.yml
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
