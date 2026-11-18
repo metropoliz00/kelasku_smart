@@ -1,29 +1,21 @@
 import React from 'react';
-import { Menu, LogOut, MonitorSmartphone, Database } from 'lucide-react';
+import { Menu, LogOut } from 'lucide-react';
 import { getMenuTitle, ROLE_LABELS } from '../config/navigation';
-import { AuthUser, ConnectionMode, MenuId, SchoolIdentity } from '../types';
+import { AuthUser, MenuId, SchoolIdentity } from '../types';
 import { UserAvatar } from './UI';
 
 export function Header({
   user,
   activeMenu,
   school,
-  connectionMode,
-  ifpMode,
-  onToggleIfpMode,
   onOpenMobileMenu,
-  onOpenConnectionModal,
   onOpenProfile,
   onLogout,
 }: {
   user: AuthUser;
   activeMenu: MenuId;
   school: SchoolIdentity | null;
-  connectionMode: ConnectionMode;
-  ifpMode: boolean;
-  onToggleIfpMode: () => void;
   onOpenMobileMenu: () => void;
-  onOpenConnectionModal: () => void;
   onOpenProfile: () => void;
   onLogout: () => void;
 }) {
@@ -60,8 +52,6 @@ export function Header({
             <span>{school.semester_aktif}</span>
           </div>
         )}
-
-
 
         <button
           type="button"

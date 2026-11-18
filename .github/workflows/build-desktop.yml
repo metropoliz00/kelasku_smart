@@ -21,11 +21,18 @@ jobs:
     steps:
       - name: Checkout repositori
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      - name: Konfigurasi Git Identity
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Install dependensi
         shell: pwsh
@@ -69,6 +76,13 @@ jobs:
             release/latest.yml
           if-no-files-found: error
 
+      - name: Hapus tag git lama jika ada agar rilis tidak duplikat
+        shell: pwsh
+        run: |
+          $tagName = "v${{ env.RELEASE_VERSION }}"
+          git tag -d $tagName 2>$null || true
+          git push origin --delete $tagName 2>$null || true
+
       - name: Publikasikan ke GitHub Releases secara otomatis
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/v*') || github.event_name == 'workflow_dispatch'
@@ -80,5 +94,6 @@ jobs:
             release/latest.yml
           draft: false
           prerelease: false
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

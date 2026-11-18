@@ -85,10 +85,6 @@ export default function App() {
   const [school, setSchool] = useState<SchoolIdentity>(DEFAULT_SCHOOL);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [ifpMode, setIfpMode] = useState(false);
-  const [connectionMode, setConnectionMode] = useState<ConnectionMode>(() => getConnectionMode());
-  const [connModalOpen, setConnModalOpen] = useState(false);
-  const [gasUrlInput, setGasUrlInput] = useState(() => getConfiguredGasUrl());
   const [profileOpen, setProfileOpen] = useState(false);
   const [profilePhoto, setProfilePhoto] = useState('');
   const [profileSaving, setProfileSaving] = useState(false);
@@ -171,10 +167,9 @@ export default function App() {
           onLoginSuccess={(newSession) => {
             setSession(newSession);
             setActiveMenu('dashboard');
-            setConnectionMode(getConnectionMode());
             addToast('success', 'Berhasil Masuk', `Selamat datang, ${newSession.user.nama_lengkap}.`);
           }}
-          onConnectionChange={() => setConnectionMode(getConnectionMode())}
+          onConnectionChange={() => {}}
           onToast={addToast}
         />
         <ToastContainer
@@ -276,17 +271,6 @@ export default function App() {
             school={school}
             onSchoolUpdated={() => {
               loadSchoolIdentity();
-              setConnectionMode(getConnectionMode());
-            }}
-            onConnectionChanged={(requireRelogin) => {
-              setConnectionMode(getConnectionMode());
-              if (requireRelogin) {
-                setStoredSession(null);
-                setSession(null);
-                setActiveMenu('dashboard');
-              } else {
-                loadSchoolIdentity();
-              }
             }}
             onToast={addToast}
           />
@@ -308,7 +292,7 @@ export default function App() {
   };
 
   return (
-    <div className={`min-h-screen flex bg-[#F8FAFC] ${ifpMode ? 'ifp-mode' : ''}`}>
+    <div className="min-h-screen flex bg-[#F8FAFC]">
       <Sidebar
         role={user.role}
         activeMenu={activeMenu}
@@ -325,14 +309,7 @@ export default function App() {
           user={user}
           activeMenu={activeMenu}
           school={school}
-          connectionMode={connectionMode}
-          ifpMode={ifpMode}
-          onToggleIfpMode={() => setIfpMode((v) => !v)}
           onOpenMobileMenu={() => setMobileMenuOpen(true)}
-          onOpenConnectionModal={() => {
-            setGasUrlInput(getConfiguredGasUrl());
-            setConnModalOpen(true);
-          }}
           onOpenProfile={() => {
             setProfilePhoto(user.foto_url || '');
             setProfileOpen(true);
@@ -372,130 +349,7 @@ export default function App() {
         <AppFooter className="border-t border-[#E5E7EB]/80 bg-white/70" />
       </div>
 
-      {/* Modal Koneksi Database */}
-      <Modal
-        open={connModalOpen}
-        onClose={() => setConnModalOpen(false)}
-        title="Status Koneksi"
-        subtitle="Hubungkan ke layanan sekolah atau gunakan Mode Browser Lokal."
-        maxWidth="max-w-lg"
-      >
-        <div className="space-y-4">
-          <div className="text-xs text-[#64748B]">
-            Mode aktif saat ini:{' '}
-            <strong className="text-[#1E1B4B]">
-              {connectionMode === 'GAS'
-                ? 'Terhubung ke Layanan Sekolah'
-                : 'Mode Browser Lokal'}
-            </strong>
-          </div>
-          <div>
-            <label className="block text-xs font-semibold mb-1">URL Google Apps Script Web App</label>
-            <input
-              type="url"
-              value={gasUrlInput}
-              onChange={(e) => setGasUrlInput(e.target.value)}
-              placeholder="https://script.google.com/macros/s/.../exec"
-              className="w-full px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg"
-            />
-            <p className="mt-1 text-[11px] text-[#64748B]">
-              Ganti URL Web App untuk menghubungkan aplikasi ke database Spreadsheet sekolah lain tanpa mengubah kode.
-            </p>
-          </div>
-          <div className="p-3 rounded-lg bg-[#F8FAFC] border border-[#E5E7EB] space-y-2">
-            <div className="text-xs font-semibold text-[#1E1B4B]">Skrip Layanan (Code.gs)</div>
-            <p className="text-xs text-[#64748B]">
-              Salin atau unduh file <code className="bg-slate-100 px-1 rounded">Code.gs</code> terbaru untuk ditempel di Google Apps Script.
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <SecondaryButton
-                onClick={async () => {
-                  const ok = await copyGasCodeToClipboard();
-                  if (ok) addToast('success', 'Code.gs Disalin', 'Tempel ke editor Apps Script lalu Deploy New version.');
-                  else addToast('error', 'Gagal Menyalin', 'Gunakan tombol Unduh Code.gs.');
-                }}
-              >
-                <Copy className="w-3.5 h-3.5" />
-                Salin Code.gs
-              </SecondaryButton>
-              <SecondaryButton
-                onClick={() => {
-                  downloadGasCodeFile();
-                  addToast('success', 'Code.gs Diunduh', 'File Code.gs siap ditempel ke Apps Script.');
-                }}
-              >
-                <Download className="w-3.5 h-3.5" />
-                Unduh Code.gs
-              </SecondaryButton>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2 justify-end pt-2 border-t border-[#E5E7EB]">
-            {getDefaultGasUrl() && (
-              <SecondaryButton
-                onClick={() => {
-                  const prevUrl = getConfiguredGasUrl();
-                  const def = resetGasUrlToDefault();
-                  setGasUrlInput(def);
-                  setConnectionMode(getConnectionMode());
-                  setConnModalOpen(false);
-                  if (def !== prevUrl) {
-                    setStoredSession(null);
-                    setSession(null);
-                    setActiveMenu('dashboard');
-                  }
-                  addToast('info', 'URL Apps Script direset ke bawaan');
-                }}
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                Reset Bawaan
-              </SecondaryButton>
-            )}
-            <SecondaryButton
-              onClick={() => {
-                const prevMode = getConnectionMode();
-                enableLocalMode();
-                setConnectionMode(getConnectionMode());
-                setConnModalOpen(false);
-                if (prevMode !== 'LOCAL') {
-                  setStoredSession(null);
-                  setSession(null);
-                  setActiveMenu('dashboard');
-                }
-                addToast('info', 'Mode Browser Lokal aktif');
-              }}
-            >
-              Gunakan Mode Lokal
-            </SecondaryButton>
-            <PrimaryButton
-              onClick={() => {
-                const check = validateGasWebAppUrl(gasUrlInput);
-                if (!check.valid) {
-                  addToast('warning', 'URL Tidak Valid', check.message);
-                  return;
-                }
-                const prevUrl = getConfiguredGasUrl();
-                setConfiguredGasUrl(check.cleaned);
-                setConnectionMode(getConnectionMode());
-                setConnModalOpen(false);
-                if (check.cleaned !== prevUrl) {
-                  setStoredSession(null);
-                  setSession(null);
-                  setActiveMenu('dashboard');
-                  addToast(
-                    'success',
-                    'URL Google Apps Script diperbarui',
-                    'Silakan masuk menggunakan akun pada database sekolah yang baru.'
-                  );
-                } else {
-                  addToast('success', 'URL Google Apps Script tersimpan');
-                }
-              }}
-            >
-              Simpan URL GAS
-            </PrimaryButton>
-          </div>
-        </div>
-      </Modal>
+
 
       {/* Modal Profil & Foto Akun */}
       <Modal

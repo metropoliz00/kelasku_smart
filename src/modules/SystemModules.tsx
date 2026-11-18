@@ -636,11 +636,6 @@ export function PengaturanModule({
   const [form, setForm] = useState<SchoolIdentity>(school);
   const [years, setYears] = useState<AcademicYear[]>([]);
   const [saving, setSaving] = useState(false);
-
-  const [gasUrlInput, setGasUrlInput] = useState(() => getConfiguredGasUrl());
-  const [testingConn, setTestingConn] = useState(false);
-  const [connStatusText, setConnStatusText] = useState('');
-  const [codeCopied, setCodeCopied] = useState(false);
   const [desktopUpdate, setDesktopUpdate] = useState<DesktopUpdateStatus | null>(null);
   const isDesktop = Boolean(window.kelaskuDesktop?.isDesktop);
 
@@ -674,46 +669,6 @@ export function PengaturanModule({
     } else {
       onToast('error', 'Gagal menyimpan', res.message);
     }
-  };
-
-  const handleSaveAndTestGasUrl = async () => {
-    const check = validateGasWebAppUrl(gasUrlInput);
-    if (!check.valid) {
-      onToast('warning', 'URL Tidak Valid', check.message);
-      return;
-    }
-    const prevUrl = getConfiguredGasUrl();
-    setTestingConn(true);
-    setConfiguredGasUrl(check.cleaned);
-    setGasUrlInput(check.cleaned);
-    const pingRes = await callApi<{ nama_sekolah?: string; user_count?: number }>('ping');
-    setTestingConn(false);
-
-    if (pingRes.success) {
-      const schoolLabel = pingRes.data?.nama_sekolah ? ` (${pingRes.data.nama_sekolah})` : '';
-      setConnStatusText(`Terhubung ke Google Apps Script${schoolLabel}.`);
-      const changed = check.cleaned !== prevUrl;
-      onToast(
-        'success',
-        'Koneksi Apps Script Berhasil',
-        changed
-          ? 'URL baru aktif. Silakan masuk ulang menggunakan akun pada database baru.'
-          : 'Koneksi ke database sekolah terverifikasi.'
-      );
-      onConnectionChanged?.(changed);
-    } else {
-      setConnStatusText(`Gagal terhubung: ${pingRes.message}`);
-      onToast('error', 'Koneksi Gagal', pingRes.message);
-    }
-  };
-
-  const handleResetGasUrl = () => {
-    const prevUrl = getConfiguredGasUrl();
-    const def = resetGasUrlToDefault();
-    setGasUrlInput(def);
-    setConnStatusText(def ? 'Dikembalikan ke URL Apps Script bawaan.' : 'URL kustom dihapus.');
-    onToast('info', 'URL Apps Script Direset');
-    onConnectionChanged?.(def !== prevUrl);
   };
 
   return (
