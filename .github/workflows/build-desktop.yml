@@ -30,6 +30,7 @@ jobs:
           node-version: 22
 
       - name: Konfigurasi Git Identity
+        shell: pwsh
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
@@ -37,11 +38,7 @@ jobs:
       - name: Install dependensi
         shell: pwsh
         run: |
-          if (Test-Path package-lock.json) {
-            npm ci --no-audit --no-fund
-          } else {
-            npm install --no-audit --no-fund
-          }
+          npm install --legacy-peer-deps --no-audit --no-fund
 
       - name: Cek tipe TypeScript
         run: npm run lint
@@ -60,7 +57,7 @@ jobs:
           }
           Write-Host "Building desktop version: $nextVer"
           npm version $nextVer --no-git-tag-version --allow-same-version
-          "RELEASE_VERSION=$nextVer" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Add-Content -Path $env:GITHUB_ENV -Value "RELEASE_VERSION=$nextVer"
 
       - name: Build frontend & paket installer Windows (.exe)
         env:
@@ -73,27 +70,21 @@ jobs:
           name: kelasku-smart-windows-${{ env.RELEASE_VERSION }}
           path: |
             release/*.exe
-            release/latest.yml
-          if-no-files-found: error
-
-      - name: Hapus tag git lama jika ada agar rilis tidak duplikat
-        shell: pwsh
-        run: |
-          $tagName = "v${{ env.RELEASE_VERSION }}"
-          git tag -d $tagName 2>$null || true
-          git push origin --delete $tagName 2>$null || true
+            release/*.yml
+          if-no-files-found: warn
 
       - name: Publikasikan ke GitHub Releases secara otomatis
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/v*') || github.event_name == 'workflow_dispatch'
         with:
           tag_name: v${{ env.RELEASE_VERSION }}
           name: KELASKU SMART v${{ env.RELEASE_VERSION }}
           files: |
             release/*.exe
-            release/latest.yml
+            release/*.yml
+          fail_on_unmatched_files: false
           draft: false
           prerelease: false
           generate_release_notes: true
+          make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
