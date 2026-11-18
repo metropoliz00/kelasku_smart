@@ -30,77 +30,53 @@ export function Header({
   const { group, label } = getMenuTitle(activeMenu, user.role);
 
   return (
-    <header className="sticky top-0 z-30 h-16 bg-white border-b border-[#E5E7EB] px-4 sm:px-6 flex items-center justify-between gap-4 no-print">
+    <header className="sticky top-0 z-30 min-h-16 bg-white border-b border-[#E5E7EB] px-4 sm:px-6 py-2 flex flex-wrap sm:flex-nowrap items-center justify-between gap-x-4 gap-y-2 no-print">
       {/* Left: Mobile toggle + Breadcrumb */}
-      <div className="flex items-center gap-3 min-w-0">
+      <div className="flex items-center gap-3 min-w-0 shrink-0 max-w-full">
         <button
           type="button"
           onClick={onOpenMobileMenu}
-          className="md:hidden p-2 rounded-lg text-[#1E1B4B] hover:bg-[#F5F3FF] cursor-pointer"
+          className="md:hidden p-2 rounded-lg text-[#1E1B4B] hover:bg-[#F5F3FF] cursor-pointer shrink-0"
           aria-label="Buka menu navigasi"
         >
           <Menu className="w-5 h-5" />
         </button>
 
         <div className="min-w-0 flex items-center gap-2 text-sm">
-          <span className="hidden sm:inline text-[#64748B] truncate">{group}</span>
-          <span className="hidden sm:inline text-[#CBD5E1]" aria-hidden="true">
+          <span className="hidden lg:inline text-[#64748B] whitespace-nowrap">{group}</span>
+          <span className="hidden lg:inline text-[#CBD5E1]" aria-hidden="true">
             /
           </span>
           <span className="font-semibold text-[#1E1B4B] truncate">{label}</span>
         </div>
       </div>
 
-      {/* Right: Academic Year context, IFP mode, Connection, Profile & Logout */}
-      <div className="flex items-center gap-2.5 sm:gap-3.5 shrink-0">
+      {/* Right: Academic Year context, Flexible Profile & Logout */}
+      <div className="flex items-center justify-end gap-2.5 sm:gap-3.5 min-w-0 flex-1">
         {school?.tahun_ajaran_aktif && (
-          <div className="hidden lg:flex items-center gap-1.5 text-xs text-[#64748B] tabular-nums whitespace-nowrap">
+          <div className="hidden lg:flex items-center gap-1.5 text-xs text-[#64748B] tabular-nums whitespace-nowrap shrink-0">
             <span>TA {school.tahun_ajaran_aktif}</span>
             <span aria-hidden="true">·</span>
             <span>{school.semester_aktif}</span>
           </div>
         )}
 
-        <button
-          type="button"
-          onClick={onOpenConnectionModal}
-          title="Status Koneksi Database"
-          className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-[#E5E7EB] hover:bg-[#F5F3FF] text-[#1E1B4B] transition-colors cursor-pointer whitespace-nowrap"
-        >
-          <Database
-            className={`w-3.5 h-3.5 ${
-              connectionMode === 'GAS' ? 'text-[#16A34A]' : 'text-[#F59E0B]'
-            }`}
-          />
-          <span>{connectionMode === 'GAS' ? 'Database' : 'Mode Lokal'}</span>
-        </button>
 
-        <button
-          type="button"
-          onClick={onToggleIfpMode}
-          title="Mode Layar Sentuh Besar (IFP)"
-          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer whitespace-nowrap ${
-            ifpMode
-              ? 'bg-[#EDE9FE] border-[#6D28D9] text-[#4C1D95]'
-              : 'bg-white border-[#E5E7EB] text-[#64748B] hover:text-[#1E1B4B]'
-          }`}
-        >
-          <MonitorSmartphone className="w-3.5 h-3.5" />
-          <span className="hidden xl:inline">Mode IFP</span>
-        </button>
 
         <button
           type="button"
           onClick={onOpenProfile}
-          title="Profil & Foto Akun"
-          className="inline-flex items-center gap-2.5 px-2 py-1 rounded-xl border border-transparent hover:border-[#DDD6FE] hover:bg-[#F5F3FF]/70 transition-colors cursor-pointer min-w-0"
+          title={`${user.nama_lengkap} (${ROLE_LABELS[user.role]}) — Profil & Foto Akun`}
+          className="inline-flex items-center gap-2.5 px-2.5 py-1.5 rounded-xl border border-transparent hover:border-[#DDD6FE] hover:bg-[#F5F3FF]/70 transition-colors cursor-pointer min-w-0 max-w-full"
         >
-          <UserAvatar src={user.foto_url} name={user.nama_lengkap} size="sm" />
-          <div className="hidden sm:block text-right min-w-0">
-            <div className="text-xs font-semibold text-[#1E1B4B] truncate max-w-[150px]">
+          <UserAvatar src={user.foto_url} name={user.nama_lengkap} size="sm" className="shrink-0" />
+          <div className="text-left sm:text-right min-w-0">
+            <div className="text-xs sm:text-[13px] font-semibold text-[#1E1B4B] leading-snug whitespace-normal break-words">
               {user.nama_lengkap}
             </div>
-            <div className="text-[11px] text-[#64748B] truncate">{ROLE_LABELS[user.role]}</div>
+            <div className="text-[11px] text-[#64748B] leading-tight whitespace-normal break-words">
+              {ROLE_LABELS[user.role]}
+            </div>
           </div>
         </button>
 

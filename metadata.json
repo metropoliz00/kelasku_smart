@@ -1,6 +1,6 @@
 {
-  "name": "KELASKU SMART",
-  "description": "SCHOOL MANAGEMENT PLATFORM - Sistem Administrasi dan Manajemen Sekolah Terintegrasi.",
+  "name": "Kelasku Smart_V2",
+  "description": "Integrated school management platform for administration, student data, and academic reporting using Google Sheets as a database.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

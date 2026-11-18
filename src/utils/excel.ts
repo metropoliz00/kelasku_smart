@@ -163,11 +163,36 @@ export async function parseAndValidateExcelFile(
   }
 
   const ws = wb.Sheets[firstSheetName];
-  const rawMatrix = XLSX.utils.sheet_to_json<(string | number | boolean | null)[]>(ws, {
-    header: 1,
-    defval: '',
-    raw: false,
-  });
+  const range = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']) : { s: { r: 0, c: 0 }, e: { r: 0, c: 0 } };
+  const rawMatrix: string[][] = [];
+
+  const getCellAddress = (r: number, c: number): string => {
+    let colName = '';
+    let num = c;
+    while (num >= 0) {
+      colName = String.fromCharCode(65 + (num % 26)) + colName;
+      num = Math.floor(num / 26) - 1;
+    }
+    return `${colName}${r + 1}`;
+  };
+
+  for (let R = range.s.r; R <= range.e.r; ++R) {
+    const row: string[] = [];
+    for (let C = range.s.c; C <= range.e.c; ++C) {
+      const cellAddress = getCellAddress(R, C);
+      const cell = ws[cellAddress];
+      let val = '';
+      if (cell) {
+        if (cell.w !== undefined && cell.w !== null && String(cell.w).trim() !== '') {
+          val = String(cell.w).trim();
+        } else if (cell.v !== undefined && cell.v !== null) {
+          val = String(cell.v).trim();
+        }
+      }
+      row.push(val);
+    }
+    rawMatrix.push(row);
+  }
 
   if (rawMatrix.length === 0) {
     return {

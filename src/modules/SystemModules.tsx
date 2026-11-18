@@ -1,34 +1,42 @@
 import React, { useEffect, useState } from 'react';
 import {
   CheckCircle2,
+  Copy,
   Database,
   Download,
   Edit3,
   FileSpreadsheet,
   KeyRound,
+  Monitor,
   Plus,
   Printer,
+  RefreshCw,
+  RotateCcw,
   Save,
   Search,
   Trash2,
 } from 'lucide-react';
 import {
   callApi,
-  enableLocalMode,
   getConfiguredGasUrl,
   getConnectionMode,
+  getDefaultGasUrl,
+  resetGasUrlToDefault,
   setConfiguredGasUrl,
+  validateGasWebAppUrl,
 } from '../services/api';
 import {
   AcademicYear,
   ActivityLog,
   AuthUser,
   ClassRoom,
+  DesktopUpdateStatus,
   SchoolIdentity,
   Student,
   Subject,
   Teacher,
   UserRole,
+  isKepalaSekolah,
 } from '../types';
 import {
   ConfirmDialog,
@@ -44,6 +52,8 @@ import {
 } from '../components/UI';
 import { exportMultiSheetWorkbook, exportRowsToExcel } from '../utils/excel';
 import { generatePdfReport } from '../utils/pdf';
+import { formatDateIndonesia } from '../utils/date';
+import { copyGasCodeToClipboard, downloadGasCodeFile } from '../utils/gasCode';
 import { ROLE_LABELS } from '../config/navigation';
 
 type ToastFn = (type: 'success' | 'error' | 'warning' | 'info', title: string, message?: string) => void;
@@ -123,7 +133,7 @@ export function PenggunaModule({
     }
 
     let relasiNama = form.relasi_nama;
-    if (form.role === 'GURU' && form.relasi_id) {
+    if ((form.role === 'GURU' || form.role === 'KEPALA_SEKOLAH') && form.relasi_id) {
       relasiNama = teachers.find((t) => t.id_guru === form.relasi_id)?.nama_guru || '';
     } else if (form.role === 'ORANG_TUA' && form.relasi_id) {
       relasiNama = students.find((s) => s.id_siswa === form.relasi_id)?.nama_lengkap || '';
@@ -178,7 +188,7 @@ export function PenggunaModule({
     <div className="space-y-5">
       <PageHeader
         title="Manajemen Pengguna & Hak Akses"
-        description="Kelola akun Administrator, Kepala Sekolah, Guru (terhubung data guru), dan Orang Tua (terhubung data siswa)."
+        description="Akun Guru, Kepala Sekolah, dan Orang Tua/Siswa otomatis terhubung dari Data Guru dan Data Siswa agar dapat langsung mengakses aplikasi."
         actions={
           <PrimaryButton
             onClick={() => {
@@ -238,6 +248,7 @@ export function PenggunaModule({
               <thead className="bg-[#EDE9FE] text-[#1E1B4B]">
                 <tr>
                   <th className="px-4 py-3 font-semibold">Username</th>
+                  <th className="px-4 py-3 font-semibold">Password (Plain Text)</th>
                   <th className="px-4 py-3 font-semibold">Nama Lengkap</th>
                   <th className="px-4 py-3 font-semibold">Role</th>
                   <th className="px-4 py-3 font-semibold">Relasi Data</th>
@@ -252,24 +263,27 @@ export function PenggunaModule({
                     const q = search.trim().toLowerCase();
                     const matchSearch =
                       !q ||
-                      u.username.toLowerCase().includes(q) ||
-                      u.nama_lengkap.toLowerCase().includes(q) ||
+                      (u.username || '').toLowerCase().includes(q) ||
+                      (u.nama_lengkap || '').toLowerCase().includes(q) ||
                       (u.relasi_nama || '').toLowerCase().includes(q);
                     return matchRole && matchSearch;
                   });
                   if (filteredUsers.length === 0) {
                     return (
                       <tr>
-                        <td colSpan={6} className="px-4 py-8 text-center text-sm text-[#64748B]">
+                        <td colSpan={7} className="px-4 py-8 text-center text-sm text-[#64748B]">
                           Tidak ada pengguna yang sesuai dengan filter pencarian.
                         </td>
                       </tr>
                     );
                   }
-                  return filteredUsers.map((u) => (
-                  <tr key={u.id_user} className="hover:bg-[#F5F3FF]/50">
+                  return filteredUsers.map((u, idx) => (
+                  <tr key={`${u.id_user || u.username || 'user'}-${idx}`} className="hover:bg-[#F5F3FF]/50">
                     <td className="px-4 py-3 font-mono text-xs font-semibold text-[#1E1B4B]">
                       {u.username}
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs text-[#4C1D95] bg-[#F5F3FF]/40">
+                      {u.password || '-'}
                     </td>
                     <td className="px-4 py-3 font-medium">
                       <div className="flex items-center gap-2.5">
@@ -281,7 +295,7 @@ export function PenggunaModule({
                       {ROLE_LABELS[u.role]}
                     </td>
                     <td className="px-4 py-3 text-xs text-[#64748B]">
-                      {u.relasi_nama || (u.relasi_id ? u.relasi_id : '-')}
+                      {u.relasi_nama || '-'}
                     </td>
                     <td className="px-4 py-3">
                       <button
@@ -313,7 +327,7 @@ export function PenggunaModule({
                             setEditing(u);
                             setForm({
                               username: u.username,
-                              password: '',
+                              password: u.password || '',
                               nama_lengkap: u.nama_lengkap,
                               role: u.role,
                               relasi_id: u.relasi_id || '',
@@ -373,14 +387,15 @@ export function PenggunaModule({
             </div>
             <div>
               <label className="block text-xs font-semibold mb-1">
-                {editing ? 'Password Baru (Kosongkan jika tetap)' : 'Password *'}
+                {editing ? 'Password (Plain Text · Terlihat)' : 'Password * (Plain Text)'}
               </label>
               <input
-                type="password"
+                type="text"
                 required={!editing}
                 value={form.password}
                 onChange={(e) => setForm({ ...form, password: e.target.value })}
-                className="w-full px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg"
+                placeholder="Masukkan password (tanpa hash)"
+                className="w-full px-3 py-2 text-sm font-mono border border-[#E5E7EB] rounded-lg"
               />
             </div>
           </div>
@@ -430,21 +445,62 @@ export function PenggunaModule({
             </div>
           </div>
 
-          {form.role === 'GURU' && (
+          {(form.role === 'GURU' || form.role === 'KEPALA_SEKOLAH') && (
             <div>
-              <label className="block text-xs font-semibold mb-1">Hubungkan dengan Data Guru</label>
+              <label className="block text-xs font-semibold mb-1">
+                {form.role === 'KEPALA_SEKOLAH'
+                  ? 'Hubungkan dengan Data Guru / Kepala Sekolah (Opsional)'
+                  : 'Hubungkan dengan Data Guru'}
+              </label>
               <select
                 value={form.relasi_id}
-                onChange={(e) => setForm({ ...form, relasi_id: e.target.value })}
+                onChange={(e) => {
+                  const tId = e.target.value;
+                  const t = teachers.find((item) => item.id_guru === tId);
+                  const isKepsek = t ? isKepalaSekolah(t.mata_pelajaran, t.jabatan) : false;
+                  const nextRole: UserRole = isKepsek ? 'KEPALA_SEKOLAH' : form.role;
+                  setForm({
+                    ...form,
+                    role: nextRole,
+                    relasi_id: tId,
+                    nama_lengkap: t && !form.nama_lengkap ? t.nama_guru : form.nama_lengkap,
+                    username:
+                      nextRole === 'GURU'
+                        ? (t?.nip ? t.nip : form.username)
+                        : (t?.nip && !form.username ? t.nip : form.username),
+                    password:
+                      nextRole === 'GURU'
+                        ? (t?.nip ? t.nip : form.password)
+                        : (t?.nip && !form.password ? t.nip : form.password),
+                  });
+                }}
                 className="w-full px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg bg-white"
               >
-                <option value="">-- Pilih Guru --</option>
-                {teachers.map((t) => (
-                  <option key={t.id_guru} value={t.id_guru}>
-                    {t.nama_guru} ({t.wali_kelas || t.jabatan})
-                  </option>
-                ))}
+                <option value="">
+                  {form.role === 'KEPALA_SEKOLAH' ? '-- Pilih Data Kepala Sekolah / Guru (Opsional) --' : '-- Pilih Guru --'}
+                </option>
+                {[...teachers]
+                  .sort((a, b) => {
+                    if (form.role === 'KEPALA_SEKOLAH') {
+                      const ak = isKepalaSekolah(a.mata_pelajaran, a.jabatan) ? 0 : 1;
+                      const bk = isKepalaSekolah(b.mata_pelajaran, b.jabatan) ? 0 : 1;
+                      if (ak !== bk) return ak - bk;
+                    }
+                    return 0;
+                  })
+                  .map((t) => (
+                    <option key={t.id_guru} value={t.id_guru}>
+                      {t.nama_guru}
+                      {isKepalaSekolah(t.mata_pelajaran, t.jabatan) ? ' [Kepala Sekolah]' : ''}
+                      {t.nip ? ` (NIP: ${t.nip})` : ''}
+                    </option>
+                  ))}
               </select>
+              <p className="mt-1 text-[11px] text-[#64748B]">
+                {form.role === 'KEPALA_SEKOLAH'
+                  ? 'Memilih data pendidik berjabatan/mapel Kepala Sekolah akan menghubungkan akun ke data pendidik tersebut.'
+                  : 'Username dan password otomatis mengikuti NIP guru. Jika memilih Kepala Sekolah, role akun otomatis disetel ke Kepala Sekolah.'}
+              </p>
             </div>
           )}
 
@@ -455,7 +511,17 @@ export function PenggunaModule({
               </label>
               <select
                 value={form.relasi_id}
-                onChange={(e) => setForm({ ...form, relasi_id: e.target.value })}
+                onChange={(e) => {
+                  const sId = e.target.value;
+                  const s = students.find((item) => item.id_siswa === sId);
+                  setForm({
+                    ...form,
+                    relasi_id: sId,
+                    nama_lengkap: s && !form.nama_lengkap ? `Wali dari ${s.nama_lengkap}` : form.nama_lengkap,
+                    username: s?.nis ? s.nis : form.username,
+                    password: s?.nis ? s.nis : form.password,
+                  });
+                }}
                 className="w-full px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg bg-white"
               >
                 <option value="">-- Pilih Siswa (Opsional) --</option>
@@ -466,7 +532,7 @@ export function PenggunaModule({
                 ))}
               </select>
               <p className="mt-1 text-[11px] text-[#64748B]">
-                Opsional saat pembuatan awal — dapat dihubungkan setelah data siswa tersedia.
+                Username dan password otomatis mengikuti NIS siswa.
               </p>
             </div>
           )}
@@ -501,6 +567,7 @@ export function PenggunaModule({
             if (res.success) {
               onToast('success', 'Password berhasil direset');
               setResetTarget(null);
+              loadData();
             } else {
               onToast('error', 'Gagal mereset password', res.message);
             }
@@ -508,13 +575,14 @@ export function PenggunaModule({
           className="space-y-4"
         >
           <div>
-            <label className="block text-xs font-semibold mb-1">Password Baru *</label>
+            <label className="block text-xs font-semibold mb-1">Password Baru * (Plain Text)</label>
             <input
-              type="password"
+              type="text"
               required
               value={newResetPassword}
               onChange={(e) => setNewResetPassword(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg"
+              placeholder="Masukkan password baru"
+              className="w-full px-3 py-2 text-sm font-mono border border-[#E5E7EB] rounded-lg"
             />
           </div>
           <div className="flex justify-end gap-2">
@@ -557,16 +625,24 @@ export function PenggunaModule({
 export function PengaturanModule({
   school,
   onSchoolUpdated,
+  onConnectionChanged,
   onToast,
 }: {
   school: SchoolIdentity;
   onSchoolUpdated: () => void;
+  onConnectionChanged?: (requireRelogin: boolean) => void;
   onToast: ToastFn;
 }) {
   const [form, setForm] = useState<SchoolIdentity>(school);
   const [years, setYears] = useState<AcademicYear[]>([]);
-  const [gasUrl, setGasUrl] = useState(getConfiguredGasUrl());
   const [saving, setSaving] = useState(false);
+
+  const [gasUrlInput, setGasUrlInput] = useState(() => getConfiguredGasUrl());
+  const [testingConn, setTestingConn] = useState(false);
+  const [connStatusText, setConnStatusText] = useState('');
+  const [codeCopied, setCodeCopied] = useState(false);
+  const [desktopUpdate, setDesktopUpdate] = useState<DesktopUpdateStatus | null>(null);
+  const isDesktop = Boolean(window.kelaskuDesktop?.isDesktop);
 
   useEffect(() => {
     setForm(school);
@@ -574,6 +650,13 @@ export function PengaturanModule({
       if (res.success && res.data) setYears(res.data);
     });
   }, [school]);
+
+  useEffect(() => {
+    if (!window.kelaskuDesktop?.onUpdateStatus) return;
+    return window.kelaskuDesktop.onUpdateStatus((status) => {
+      setDesktopUpdate(status);
+    });
+  }, []);
 
   const handleSaveSchool = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -593,19 +676,58 @@ export function PengaturanModule({
     }
   };
 
+  const handleSaveAndTestGasUrl = async () => {
+    const check = validateGasWebAppUrl(gasUrlInput);
+    if (!check.valid) {
+      onToast('warning', 'URL Tidak Valid', check.message);
+      return;
+    }
+    const prevUrl = getConfiguredGasUrl();
+    setTestingConn(true);
+    setConfiguredGasUrl(check.cleaned);
+    setGasUrlInput(check.cleaned);
+    const pingRes = await callApi<{ nama_sekolah?: string; user_count?: number }>('ping');
+    setTestingConn(false);
+
+    if (pingRes.success) {
+      const schoolLabel = pingRes.data?.nama_sekolah ? ` (${pingRes.data.nama_sekolah})` : '';
+      setConnStatusText(`Terhubung ke Google Apps Script${schoolLabel}.`);
+      const changed = check.cleaned !== prevUrl;
+      onToast(
+        'success',
+        'Koneksi Apps Script Berhasil',
+        changed
+          ? 'URL baru aktif. Silakan masuk ulang menggunakan akun pada database baru.'
+          : 'Koneksi ke database sekolah terverifikasi.'
+      );
+      onConnectionChanged?.(changed);
+    } else {
+      setConnStatusText(`Gagal terhubung: ${pingRes.message}`);
+      onToast('error', 'Koneksi Gagal', pingRes.message);
+    }
+  };
+
+  const handleResetGasUrl = () => {
+    const prevUrl = getConfiguredGasUrl();
+    const def = resetGasUrlToDefault();
+    setGasUrlInput(def);
+    setConnStatusText(def ? 'Dikembalikan ke URL Apps Script bawaan.' : 'URL kustom dihapus.');
+    onToast('info', 'URL Apps Script Direset');
+    onConnectionChanged?.(def !== prevUrl);
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Pengaturan Sekolah & Koneksi"
-        description="Identitas resmi sekolah yang dicetak pada kop laporan PDF serta konfigurasi Google Apps Script Web App."
+        title="Pengaturan Sekolah"
+        description="Identitas resmi sekolah yang dicetak pada kop laporan PDF dan pengaturan tahun ajaran."
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <form
-          onSubmit={handleSaveSchool}
-          className="lg:col-span-8 bg-white border border-[#E5E7EB] rounded-xl p-6 space-y-4"
-        >
-          <h2 className="text-base font-bold text-[#1E1B4B]">Identitas Sekolah</h2>
+      <form
+        onSubmit={handleSaveSchool}
+        className="bg-white border border-[#E5E7EB] rounded-xl p-6 space-y-4"
+      >
+        <h2 className="text-base font-bold text-[#1E1B4B]">Identitas Sekolah</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="sm:col-span-2">
               <label className="block text-xs font-semibold mb-1">Nama Sekolah *</label>
@@ -715,58 +837,69 @@ export function PengaturanModule({
             </div>
           </div>
 
-          <div className="pt-3 border-t border-[#E5E7EB] flex justify-end">
-            <PrimaryButton type="submit" loading={saving}>
-              <Save className="w-4 h-4" />
-              Simpan Identitas Sekolah
-            </PrimaryButton>
-          </div>
-        </form>
+        <div className="pt-3 border-t border-[#E5E7EB] flex justify-end">
+          <PrimaryButton type="submit" loading={saving}>
+            <Save className="w-4 h-4" />
+            Simpan Identitas Sekolah
+          </PrimaryButton>
+        </div>
+      </form>
 
-        {/* Backend Connection Card */}
-        <div className="lg:col-span-4 bg-white border border-[#E5E7EB] rounded-xl p-6 space-y-4 h-fit">
-          <div className="flex items-center gap-2">
-            <Database className="w-5 h-5 text-[#6D28D9]" />
-            <h2 className="text-base font-bold text-[#1E1B4B]">Koneksi Database</h2>
+
+
+      {/* Info Aplikasi Desktop (.exe) & Pembaruan Otomatis */}
+      {isDesktop && (
+        <div className="bg-white border border-[#E5E7EB] rounded-xl p-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-base font-bold text-[#1E1B4B] flex items-center gap-2">
+                <Monitor className="w-4 h-4 text-[#6D28D9]" />
+                Aplikasi Desktop (.exe) & Pembaruan Otomatis
+              </h2>
+              <p className="text-xs text-[#64748B] mt-0.5">
+                Versi terpasang: <strong>v{window.kelaskuDesktop?.appVersion || '1.0.0'}</strong> · Pembaruan otomatis memeriksa rilis terbaru.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <SecondaryButton
+                onClick={() => window.kelaskuDesktop?.checkForUpdates()}
+                disabled={desktopUpdate?.status === 'checking' || desktopUpdate?.status === 'progress'}
+              >
+                <RefreshCw
+                  className={`w-4 h-4 ${desktopUpdate?.status === 'checking' ? 'animate-spin' : ''}`}
+                />
+                {desktopUpdate?.status === 'checking' ? 'Memeriksa...' : 'Cek Pembaruan'}
+              </SecondaryButton>
+              {desktopUpdate?.status === 'downloaded' && (
+                <PrimaryButton onClick={() => window.kelaskuDesktop?.installUpdate()}>
+                  Pasang Pembaruan & Mulai Ulang
+                </PrimaryButton>
+              )}
+            </div>
           </div>
-          <p className="text-xs text-[#64748B]">
-            Mode aktif saat ini:{' '}
-            <strong className="text-[#1E1B4B]">
-              {getConnectionMode() === 'GAS' ? 'Google Apps Script Web App' : 'Mode Browser Lokal'}
-            </strong>
-          </p>
-          <div>
-            <label className="block text-xs font-semibold mb-1">URL Web App Google Apps Script</label>
-            <input
-              type="url"
-              value={gasUrl}
-              onChange={(e) => setGasUrl(e.target.value)}
-              placeholder="https://script.google.com/macros/s/.../exec"
-              className="w-full px-3 py-2 text-xs border border-[#E5E7EB] rounded-lg"
-            />
-          </div>
-          <div className="flex flex-col gap-2">
-            <PrimaryButton
-              onClick={() => {
-                setConfiguredGasUrl(gasUrl);
-                onToast('success', 'URL Google Apps Script disimpan', 'Silakan muat ulang atau login ulang jika berpindah backend.');
-              }}
-            >
-              <CheckCircle2 className="w-4 h-4" />
-              Simpan URL GAS
-            </PrimaryButton>
-            <SecondaryButton
-              onClick={() => {
-                enableLocalMode();
-                setGasUrl('');
-                onToast('info', 'Beralih ke Mode Lokal');
-              }}
-            >
-              Gunakan Mode Browser Lokal
-            </SecondaryButton>
+
+          {desktopUpdate?.message && (
+            <div className="p-3 rounded-lg bg-[#F5F3FF] border border-[#DDD6FE] text-xs text-[#4C1D95] font-medium">
+              {desktopUpdate.message}
+            </div>
+          )}
+
+          <div className="text-xs text-[#64748B] space-y-1 bg-[#F8FAFC] border border-[#E5E7EB] rounded-lg p-3">
+            <div>
+              <strong>Alternatif Tanpa UI:</strong> Anda juga dapat membuat file teks{' '}
+              <code className="bg-white px-1 rounded border border-[#E5E7EB]">appscript-url.txt</code> berisi URL{' '}
+              <code className="bg-white px-1 rounded border border-[#E5E7EB]">/exec</code> di folder yang sama dengan file{' '}
+              <code className="bg-white px-1 rounded border border-[#E5E7EB]">.exe</code>.
+            </div>
+            {window.kelaskuDesktop?.configPath && (
+              <div className="truncate" title={window.kelaskuDesktop.configPath}>
+                <strong>File Konfigurasi Desktop:</strong>{' '}
+                <span className="font-mono">{window.kelaskuDesktop.configPath}</span>
+              </div>
+            )}
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -787,6 +920,7 @@ export function LaporanModule({
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [classes, setClasses] = useState<ClassRoom[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [filterClass, setFilterClass] = useState('');
 
   useEffect(() => {
     const load = async () => {
@@ -806,17 +940,23 @@ export function LaporanModule({
     load();
   }, []);
 
+  const filteredStudents = students.filter((s) => !filterClass || s.id_kelas === filterClass);
+  const filteredClasses = classes.filter((c) => !filterClass || c.id_kelas === filterClass);
+  const selectedClassName = classes.find((c) => c.id_kelas === filterClass)?.nama_kelas;
+
   const cards = [
     {
       title: 'Laporan Data Induk Siswa',
-      desc: `${students.length} siswa tercatat di database.`,
+      desc: `${filteredStudents.length} siswa terdata${selectedClassName ? ` (${selectedClassName})` : ''}.`,
       onPdf: () =>
         generatePdfReport({
           orientation: 'landscape',
-          title: 'LAPORAN DATA INDUK PESERTA DIDIK',
+          title: selectedClassName
+            ? `LAPORAN DATA INDUK PESERTA DIDIK (${selectedClassName.toUpperCase()})`
+            : 'LAPORAN DATA INDUK PESERTA DIDIK',
           school,
           headers: ['No', 'NIS', 'NISN', 'Nama', 'JK', 'Rombel Saat Ini', 'Orang Tua / HP', 'Status'],
-          rows: students.map((s, i) => [
+          rows: filteredStudents.map((s, i) => [
             s.no || i + 1,
             s.nis,
             s.nisn || '-',
@@ -833,7 +973,7 @@ export function LaporanModule({
           `Laporan_Siswa_${new Date().toISOString().slice(0, 10)}.xlsx`,
           'Siswa',
           ['No', 'Nama', 'NIS', 'JK', 'NISN', 'NIK', 'Rombel Saat Ini', 'HP', 'Nama Ayah', 'Nama Ibu', 'Status'],
-          students.map((s, i) => [
+          filteredStudents.map((s, i) => [
             s.no || i + 1,
             s.nama_lengkap,
             s.nis,
@@ -850,7 +990,7 @@ export function LaporanModule({
     },
     {
       title: 'Laporan Data Guru & Pegawai',
-      desc: `${teachers.length} pendidik tercatat di database.`,
+      desc: `${teachers.length} pendidik terdata.`,
       onPdf: () =>
         generatePdfReport({
           orientation: 'landscape',
@@ -888,12 +1028,12 @@ export function LaporanModule({
             t.nuptk,
             t.jenis_kelamin,
             t.tempat_lahir || '',
-            t.tanggal_lahir || '',
+            t.tanggal_lahir ? formatDateIndonesia(t.tanggal_lahir) : '',
             t.ijazah_tertinggi || '',
             t.jabatan,
             t.status_kepegawaian,
-            t.tmt_pengangkatan || '',
-            t.mulai_bekerja_disini || '',
+            t.tmt_pengangkatan ? formatDateIndonesia(t.tmt_pengangkatan) : '',
+            t.mulai_bekerja_disini ? formatDateIndonesia(t.mulai_bekerja_disini) : '',
             t.pangkat_gol || '',
             t.masa_kerja_thn || '',
             t.masa_kerja_bln || '',
@@ -905,14 +1045,14 @@ export function LaporanModule({
     },
     {
       title: 'Laporan Rombongan Belajar & Mapel',
-      desc: `${classes.length} kelas aktif · ${subjects.length} mata pelajaran.`,
+      desc: `${filteredClasses.length} kelas aktif · ${subjects.length} mata pelajaran.`,
       onPdf: () =>
         generatePdfReport({
           orientation: 'portrait',
           title: 'LAPORAN ROMBONGAN BELAJAR SEKOLAH',
           school,
           headers: ['No', 'Nama Kelas', 'Tingkat', 'Wali Kelas', 'Tahun Ajaran', 'Jumlah Siswa'],
-          rows: classes.map((c, i) => [
+          rows: filteredClasses.map((c, i) => [
             i + 1,
             c.nama_kelas,
             c.tingkat,
@@ -927,7 +1067,7 @@ export function LaporanModule({
           `Laporan_Kelas_${new Date().toISOString().slice(0, 10)}.xlsx`,
           'Kelas',
           ['Nama Kelas', 'Tingkat', 'Wali Kelas', 'Tahun Ajaran', 'Jumlah Siswa'],
-          classes.map((c) => [c.nama_kelas, c.tingkat, c.wali_kelas, c.tahun_ajaran, c.jumlah_siswa ?? 0])
+          filteredClasses.map((c) => [c.nama_kelas, c.tingkat, c.wali_kelas, c.tahun_ajaran, c.jumlah_siswa ?? 0])
         ),
     },
   ];
@@ -937,7 +1077,31 @@ export function LaporanModule({
       <PageHeader
         title="Pusat Laporan Pendidikan"
         description="Unduh laporan resmi sekolah dalam format PDF (A4) maupun Excel (.xlsx) dari data aktual."
+        actions={
+          <PrimaryButton onClick={() => window.print()}>
+            <Printer className="w-4 h-4" />
+            Cetak Halaman
+          </PrimaryButton>
+        }
       />
+
+      {classes.length > 0 && (
+        <div className="bg-white border border-[#E5E7EB] rounded-xl p-4 flex flex-wrap items-center gap-3">
+          <label className="text-xs font-semibold text-[#1E1B4B]">Filter Kelas</label>
+          <select
+            value={filterClass}
+            onChange={(e) => setFilterClass(e.target.value)}
+            className="w-full sm:w-64 px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg bg-white"
+          >
+            <option value="">Semua Kelas</option>
+            {classes.map((c) => (
+              <option key={c.id_kelas} value={c.id_kelas}>
+                {c.nama_kelas}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {loading ? (
         <TableSkeleton cols={3} rows={3} />
@@ -1038,28 +1202,13 @@ export function BackupModule({ onToast }: { onToast: ToastFn }) {
     onToast('success', 'Backup JSON berhasil diunduh');
   };
 
-  const handleRunSetupDatabase = async () => {
-    setBusy(true);
-    const res = await callApi('setupDatabase');
-    setBusy(false);
-    if (res.success) {
-      onToast('success', 'setupDatabase() berhasil', '21 sheet dan header kolom terverifikasi.');
-    } else {
-      onToast('error', 'setupDatabase() gagal', res.message);
-    }
-  };
-
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Backup Database & Log Aktivitas"
-        description="Ekspor cadangan data sekolah dan verifikasi struktur database."
+        title="Backup Data & Log Aktivitas"
+        description="Ekspor cadangan data sekolah dan pantau riwayat aktivitas pengguna."
         actions={
           <>
-            <SecondaryButton onClick={handleRunSetupDatabase} disabled={busy}>
-              <Database className="w-4 h-4" />
-              Verifikasi Struktur Sheet
-            </SecondaryButton>
             <SecondaryButton onClick={handleBackupJson} disabled={busy}>
               <Download className="w-4 h-4" />
               Backup JSON

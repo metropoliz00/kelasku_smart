@@ -1,5 +1,5 @@
 import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
+import autoTable, { RowInput } from 'jspdf-autotable';
 import { SchoolIdentity } from '../types';
 
 export interface PdfReportOptions {
@@ -9,7 +9,7 @@ export interface PdfReportOptions {
   school: SchoolIdentity;
   metaPairs?: { label: string; value: string }[];
   headers: string[];
-  rows: (string | number)[][];
+  rows: RowInput[];
   filename: string;
   columnStyles?: Record<number, { halign?: 'left' | 'center' | 'right'; cellWidth?: number }>;
   includeSignatures?: boolean;

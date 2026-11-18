@@ -12,7 +12,7 @@ Database terdiri dari **21 Sheet** yang dibuat secara otomatis oleh fungsi `setu
 | 6 | `KELAS` | `id_kelas`, `nama_kelas`, `tingkat`, `wali_kelas_id`, `wali_kelas`, `id_tahun_ajaran`, `tahun_ajaran`, `created_at`, `updated_at` |
 | 7 | `MAPEL` | `id_mapel`, `kode_mapel`, `nama_mapel`, `kelompok`, `alokasi_waktu`, `status_aktif`, `created_at`, `updated_at` |
 | 8 | `JADWAL` | `id_jadwal`, `id_tahun_ajaran`, `semester`, `hari`, `jam_ke`, `waktu_mulai`, `waktu_selesai`, `id_kelas`, `nama_kelas`, `id_mapel`, `nama_mapel`, `id_guru`, `nama_guru`, `created_at`, `updated_at` |
-| 9 | `PIKET` | `id_piket`, `hari`, `id_kelas`, `nama_kelas`, `id_guru`, `nama_guru`, `petugas_siswa`, `tugas`, `keterangan`, `created_at`, `updated_at` |
+| 9 | `PIKET` | `id_piket`, `hari`, `id_kelas`, `nama_kelas`, `id_guru`, `nama_guru`, `id_siswa`, `petugas_siswa`, `tugas`, `checklist_kebersihan`, `keterangan`, `created_at`, `updated_at` |
 | 10 | `ABSENSI` | `id_absensi`, `tanggal`, `id_tahun_ajaran`, `semester`, `id_kelas`, `nama_kelas`, `id_siswa`, `nama_siswa`, `status`, `keterangan`, `koreksi_catatan`, `diinput_oleh`, `created_at`, `updated_at` |
 | 11 | `NILAI` | `id_nilai`, `id_tahun_ajaran`, `tahun_ajaran`, `semester`, `id_kelas`, `nama_kelas`, `id_mapel`, `nama_mapel`, `id_guru`, `nama_guru`, `id_siswa`, `nama_siswa`, `sum_1`, `sum_2`, `sum_3`, `sum_4`, `sas`, `rata_rata`, `jumlah_komponen`, `catatan`, `created_at`, `updated_at` |
 | 12 | `JURNAL` | `id_jurnal`, `tanggal`, `id_guru`, `nama_guru`, `id_kelas`, `nama_kelas`, `id_mapel`, `nama_mapel`, `materi`, `tujuan_pembelajaran`, `aktivitas`, `metode`, `refleksi`, `tindak_lanjut`, `created_at`, `updated_at` |

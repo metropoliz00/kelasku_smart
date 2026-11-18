@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
@@ -11,6 +11,7 @@ import {
   User,
   X,
   AlertTriangle,
+  Printer,
 } from 'lucide-react';
 import { ToastItem } from '../types';
 import {
@@ -200,7 +201,7 @@ export function PhotoUploadField({
             )}
           </div>
           <p className="text-[11px] text-[#64748B]">
-            Format JPG, PNG, atau WEBP · Maksimal <strong>200 KB</strong> · Disimpan sebagai Base64 di database (otomatis menjadi avatar jika kosong).
+            Format JPG, PNG, atau WEBP · Maksimal <strong>200 KB</strong> · Inisial nama otomatis ditampilkan jika foto kosong.
           </p>
           {localError && <p className="text-xs font-medium text-[#DC2626]">{localError}</p>}
         </div>
@@ -215,16 +216,27 @@ export function PageHeader({
   actions,
 }: {
   title: string;
-  description?: string;
+  description?: React.ReactNode;
   actions?: React.ReactNode;
 }) {
   return (
     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-5 border-b border-[#E5E7EB]">
       <div>
         <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-[#1E1B4B]">{title}</h1>
-        {description && <p className="mt-1 text-sm text-[#64748B]">{description}</p>}
+        {description && <div className="mt-1 text-sm text-[#64748B]">{description}</div>}
       </div>
-      {actions && <div className="flex flex-wrap items-center gap-2.5 shrink-0">{actions}</div>}
+      <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+        {actions}
+        <button
+          type="button"
+          onClick={() => window.print()}
+          title="Cetak Halaman"
+          aria-label="Cetak Halaman"
+          className="p-2 rounded-xl text-[#64748B] hover:text-[#6D28D9] bg-white border border-[#E5E7EB] hover:border-[#6D28D9]/40 hover:bg-[#F5F3FF] transition-colors cursor-pointer no-print shadow-[0_1px_2px_rgba(30,27,75,0.04)]"
+        >
+          <Printer className="w-4 h-4" />
+        </button>
+      </div>
     </div>
   );
 }
@@ -315,16 +327,17 @@ export function StatusText({
   status,
   tone,
 }: {
-  status: string;
+  status?: string | null;
   tone?: 'success' | 'warning' | 'danger' | 'info' | 'neutral';
 }) {
+  const text = String(status ?? '').trim();
   const resolvedTone =
     tone ||
     (() => {
-      const s = status.toLowerCase();
+      const s = text.toLowerCase();
       if (['aktif', 'hadir', 'baik', 'selesai', 'dikonfirmasi', 'membudaya'].includes(s)) return 'success';
-      if (['izin', 'terlambat', 'rusak ringan', 'pantauan', 'proses', 'draft', 'dibaca'].includes(s)) return 'warning';
-      if (['alpa', 'nonaktif', 'rusak berat', 'pindah', 'perlu bimbingan'].includes(s)) return 'danger';
+      if (['izin', 'rusak ringan', 'pantauan', 'proses', 'draft', 'dibaca'].includes(s)) return 'warning';
+      if (['alpa', 'alpha', 'nonaktif', 'rusak berat', 'pindah', 'perlu bimbingan'].includes(s)) return 'danger';
       if (['sakit', 'terkirim', 'lulus', 'arsip'].includes(s)) return 'info';
       return 'neutral';
     })();
@@ -341,7 +354,7 @@ export function StatusText({
     <span
       className={`inline-flex items-center px-2 py-0.5 text-xs font-medium border rounded-md whitespace-nowrap ${colorMap[resolvedTone]}`}
     >
-      {status || '-'}
+      {text || '-'}
     </span>
   );
 }
@@ -591,20 +604,26 @@ export function ExcelImportModal({
     label: string;
     existingValues: Set<string>;
   }[];
-  onConfirmImport: (validRows: Record<string, string>[]) => Promise<void>;
+  onConfirmImport: (
+    validRows: Record<string, string>[],
+    setProgress?: (text: string) => void
+  ) => Promise<boolean | void>;
 }) {
   const [headerErrors, setHeaderErrors] = useState<string[]>([]);
   const [parsedRows, setParsedRows] = useState<ParsedExcelRow[]>([]);
   const [fileName, setFileName] = useState('');
   const [importing, setImporting] = useState(false);
+  const [progressText, setProgressText] = useState('');
 
   const reset = () => {
     setHeaderErrors([]);
     setParsedRows([]);
     setFileName('');
+    setProgressText('');
   };
 
   const handleClose = () => {
+    if (importing) return;
     reset();
     onClose();
   };
@@ -621,14 +640,38 @@ export function ExcelImportModal({
   const validRows = parsedRows.filter((r) => r.errors.length === 0).map((r) => r.data);
   const errorRowCount = parsedRows.filter((r) => r.errors.length > 0).length;
 
+  const previewColumns: ExcelColumnSpec[] = useMemo(() => {
+    return columns
+      .filter((col: ExcelColumnSpec) => {
+        const k = (col.key || '').trim().toLowerCase();
+        const h = (col.header || '').trim().toLowerCase();
+        return !(
+          k === 'no' ||
+          k === 'nomor' ||
+          k === 'no_urut' ||
+          h === 'no' ||
+          h === 'no.' ||
+          h === 'nomor' ||
+          h === 'no urut' ||
+          /^no\.?$/i.test(h)
+        );
+      })
+      .slice(0, 5);
+  }, [columns]);
+
   const handleSave = async () => {
     if (validRows.length === 0) return;
     setImporting(true);
+    setProgressText(`Menyiapkan ${validRows.length} data...`);
     try {
-      await onConfirmImport(validRows);
-      handleClose();
+      const ok = await onConfirmImport(validRows, setProgressText);
+      if (ok !== false) {
+        reset();
+        onClose();
+      }
     } finally {
       setImporting(false);
+      setProgressText('');
     }
   };
 
@@ -647,7 +690,7 @@ export function ExcelImportModal({
             <div>
               <p className="text-sm font-semibold text-[#1E1B4B]">Langkah 1: Gunakan Template Resmi</p>
               <p className="text-xs text-[#64748B]">
-                Nama kolom Excel harus sama persis dengan struktur database.
+                Gunakan template resmi agar nama dan urutan kolom sesuai saat impor.
               </p>
             </div>
           </div>
@@ -703,8 +746,8 @@ export function ExcelImportModal({
               <table className="w-full text-xs text-left">
                 <thead className="bg-[#EDE9FE] text-[#1E1B4B] sticky top-0">
                   <tr>
-                    <th className="px-3 py-2 font-semibold">Baris</th>
-                    {columns.slice(0, 5).map((col) => (
+                    <th className="px-3 py-2 font-semibold">No</th>
+                    {previewColumns.map((col: ExcelColumnSpec) => (
                       <th key={col.key} className="px-3 py-2 font-semibold whitespace-nowrap">
                         {col.header}
                       </th>
@@ -713,13 +756,13 @@ export function ExcelImportModal({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#E5E7EB]">
-                  {parsedRows.map((row) => (
+                  {parsedRows.map((row, index) => (
                     <tr
                       key={row.rowIndex}
                       className={row.errors.length > 0 ? 'bg-red-50/70' : 'bg-white'}
                     >
-                      <td className="px-3 py-2 tabular-nums font-mono">{row.rowIndex}</td>
-                      {columns.slice(0, 5).map((col) => (
+                      <td className="px-3 py-2 tabular-nums font-mono">{index + 1}</td>
+                      {previewColumns.map((col: ExcelColumnSpec) => (
                         <td key={col.key} className="px-3 py-2 whitespace-nowrap">
                           {row.data[col.key] || '-'}
                         </td>
@@ -741,15 +784,22 @@ export function ExcelImportModal({
           </div>
         )}
 
-        <div className="flex items-center justify-end gap-3 pt-2 border-t border-[#E5E7EB]">
-          <SecondaryButton onClick={handleClose}>Batal</SecondaryButton>
-          <PrimaryButton
-            onClick={handleSave}
-            disabled={validRows.length === 0 || headerErrors.length > 0}
-            loading={importing}
-          >
-            Simpan {validRows.length > 0 ? `${validRows.length} Data Valid` : 'Data'}
-          </PrimaryButton>
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-[#E5E7EB]">
+          <div className="text-xs font-medium text-[#6D28D9]">
+            {importing ? progressText || 'Sedang mengimpor data ke server...' : ''}
+          </div>
+          <div className="flex items-center gap-3">
+            <SecondaryButton onClick={handleClose} disabled={importing}>
+              Batal
+            </SecondaryButton>
+            <PrimaryButton
+              onClick={handleSave}
+              disabled={validRows.length === 0 || headerErrors.length > 0}
+              loading={importing}
+            >
+              Simpan {validRows.length > 0 ? `${validRows.length} Data Valid` : 'Data'}
+            </PrimaryButton>
+          </div>
         </div>
       </div>
     </Modal>

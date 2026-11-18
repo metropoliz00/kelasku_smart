@@ -21,6 +21,19 @@ import {
   Student,
   Subject,
   Teacher,
+  isPaiOrPjok,
+  isKepalaSekolah,
+  isNonWaliTeacher,
+  isMapelGuruKelas,
+  isExplicitNonWaliValue,
+  findMatchingClassForSubject,
+  resolveTeacherClassAssignment,
+  generateNextSubjectId,
+  suggestSubjectCode,
+  generateNextClassId,
+  inferTingkatFromClassName,
+  compareClassesByName,
+  previewClassIdForName,
 } from '../types';
 import {
   ConfirmDialog,
@@ -41,6 +54,7 @@ import {
   exportRowsToExcel,
 } from '../utils/excel';
 import { generatePdfReport } from '../utils/pdf';
+import { formatDateIndonesia, normalizeDateYmd } from '../utils/date';
 
 type ToastFn = (type: 'success' | 'error' | 'warning' | 'info', title: string, message?: string) => void;
 
@@ -304,9 +318,12 @@ export function SiswaModule({
 
   const openAdd = () => {
     setEditing(null);
+    const defaultClass = classes.length === 1 ? classes[0] : undefined;
     setForm({
       ...EMPTY_STUDENT_FORM,
       no: students.length + 1,
+      id_kelas: defaultClass?.id_kelas || '',
+      nama_kelas: defaultClass?.nama_kelas || '',
     });
     setFormTab('identitas');
     setFormOpen(true);
@@ -317,6 +334,7 @@ export function SiswaModule({
     setForm({
       ...EMPTY_STUDENT_FORM,
       ...item,
+      tanggal_lahir: normalizeDateYmd(item.tanggal_lahir),
     });
     setFormTab('identitas');
     setFormOpen(true);
@@ -404,7 +422,7 @@ export function SiswaModule({
         s.nisn || '-',
         s.nama_lengkap,
         s.jenis_kelamin,
-        `${s.tempat_lahir || '-'}, ${s.tanggal_lahir || '-'}`,
+        `${s.tempat_lahir || '-'}, ${formatDateIndonesia(s.tanggal_lahir)}`,
         s.nama_kelas || '-',
         `${s.nama_ayah || '-'} / ${s.nama_ibu || '-'}`,
         s.hp || s.telepon_ortu || s.telepon || '-',
@@ -414,10 +432,13 @@ export function SiswaModule({
     });
   };
 
-  const handleImportConfirm = async (validRows: Record<string, string>[]) => {
+  const handleImportConfirm = async (
+    validRows: Record<string, string>[],
+    setProgress?: (text: string) => void
+  ): Promise<boolean> => {
     const mapped = validRows.map((r) => {
       const cls = classes.find(
-        (c) => c.nama_kelas.toLowerCase() === (r.nama_kelas || '').trim().toLowerCase()
+        (c) => (c.nama_kelas || '').toLowerCase() === (r.nama_kelas || '').trim().toLowerCase()
       );
       return {
         ...r,
@@ -427,13 +448,37 @@ export function SiswaModule({
         status_siswa: 'Aktif',
       };
     });
-    const res = await callApi('importStudents', { rows: mapped });
-    if (res.success) {
-      onToast('success', 'Import Berhasil', res.message);
-      loadData();
-    } else {
-      onToast('error', 'Import Gagal', res.message);
+
+    const CHUNK_SIZE = 30;
+    const total = mapped.length;
+    let totalImported = 0;
+
+    for (let i = 0; i < total; i += CHUNK_SIZE) {
+      const chunk = mapped.slice(i, i + CHUNK_SIZE);
+      const isLast = i + CHUNK_SIZE >= total;
+      const doneAfter = Math.min(i + chunk.length, total);
+      setProgress?.(`Mengimpor data siswa ${doneAfter} dari ${total}...`);
+      const res = await callApi<{ count?: number }>('importStudents', {
+        rows: chunk,
+        skipSync: !isLast,
+      });
+      if (!res.success) {
+        onToast(
+          'error',
+          'Import Gagal',
+          totalImported > 0
+            ? `${totalImported} data awal berhasil masuk, lalu terhenti: ${res.message}`
+            : res.message
+        );
+        if (totalImported > 0) loadData();
+        return false;
+      }
+      totalImported += res.data?.count ?? chunk.length;
     }
+
+    onToast('success', 'Import Berhasil', `${totalImported} data siswa berhasil diimpor.`);
+    loadData();
+    return true;
   };
 
   // Precompute top-level column header segments for 2-row table thead
@@ -447,7 +492,7 @@ export function SiswaModule({
     <div className="space-y-5">
       <PageHeader
         title={user.role === 'ORANG_TUA' ? 'Data Anak' : 'Data Siswa'}
-        description="Struktur lengkap 66 kolom peserta didik sesuai format sheet database, import Excel, dan cetak PDF."
+        description="Struktur lengkap data peserta didik sesuai format, import Excel, dan cetak PDF."
         actions={
           <>
             {user.role === 'ADMIN' && (
@@ -525,7 +570,7 @@ export function SiswaModule({
             }`}
           >
             <Table2 className="w-3.5 h-3.5" />
-            Tampilan Sheet Lengkap
+            Tampilan Lengkap
           </button>
           <button
             type="button"
@@ -561,7 +606,7 @@ export function SiswaModule({
       ) : viewMode === 'sheet' ? (
         <div className="bg-white border border-[#E5E7EB] rounded-xl overflow-hidden">
           <div className="px-4 py-2 bg-[#F8FAFC] border-b border-[#E5E7EB] flex items-center justify-between text-xs text-[#64748B]">
-            <span>Menampilkan {filtered.length} peserta didik · 66 kolom struktur database</span>
+            <span>Menampilkan {filtered.length} peserta didik · 66 kolom data lengkap</span>
             <span className="hidden sm:inline">Geser tabel ke samping untuk melihat semua kolom</span>
           </div>
           <div className="overflow-x-auto">
@@ -640,15 +685,17 @@ export function SiswaModule({
                 {filtered.map((s, idx) => {
                   const rec = s as unknown as Record<string, string | number | undefined>;
                   return (
-                    <tr key={s.id_siswa} className="group hover:bg-[#F5F3FF]/60 transition-colors">
+                    <tr key={`${s.id_siswa || s.nis || 'siswa'}-${idx}`} className="group hover:bg-[#F5F3FF]/60 transition-colors">
                       {STUDENT_EXCEL_COLS.map((col, cIdx) => {
                         let rawVal: string | number | undefined = rec[col.key];
                         if (col.key === 'no') rawVal = s.no ?? idx + 1;
                         if (col.key === 'hp') rawVal = s.hp || s.telepon_ortu || '';
                         const displayVal =
-                          rawVal !== undefined && rawVal !== null && String(rawVal).trim() !== ''
-                            ? String(rawVal)
-                            : '-';
+                          col.key === 'tanggal_lahir'
+                            ? formatDateIndonesia(rawVal)
+                            : rawVal !== undefined && rawVal !== null && String(rawVal).trim() !== ''
+                              ? String(rawVal)
+                              : '-';
                         const stickyClass =
                           cIdx === 0
                             ? 'sticky left-0 z-10 bg-white group-hover:bg-[#F5F3FF] w-12 min-w-[48px] text-center text-[#64748B]'
@@ -732,7 +779,7 @@ export function SiswaModule({
               </thead>
               <tbody className="divide-y divide-[#E5E7EB]">
                 {filtered.map((s, idx) => (
-                  <tr key={s.id_siswa} className="hover:bg-[#F5F3FF]/50 transition-colors">
+                  <tr key={`${s.id_siswa || s.nis || 'siswa'}-${idx}`} className="hover:bg-[#F5F3FF]/50 transition-colors">
                     <td className="px-4 py-3 tabular-nums text-[#64748B]">{s.no || idx + 1}</td>
                     <td className="px-4 py-3 tabular-nums font-mono text-xs">
                       <div className="font-semibold text-[#1E1B4B]">{s.nis}</div>
@@ -801,7 +848,7 @@ export function SiswaModule({
         open={formOpen}
         onClose={() => setFormOpen(false)}
         title={editing ? 'Edit Data Siswa' : 'Tambah Data Siswa'}
-        subtitle="Lengkapi formulir sesuai struktur 66 kolom database peserta didik."
+        subtitle="Lengkapi formulir data peserta didik."
         maxWidth="max-w-4xl"
       >
         <form onSubmit={handleSave} className="space-y-5">
@@ -884,7 +931,7 @@ export function SiswaModule({
               <FieldInput
                 label="Tanggal Lahir"
                 type="date"
-                value={form.tanggal_lahir}
+                value={normalizeDateYmd(form.tanggal_lahir)}
                 onChange={(v) => setForm({ ...form, tanggal_lahir: v })}
               />
               <FieldInput
@@ -1088,7 +1135,7 @@ export function SiswaModule({
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-[#F8FAFC] border border-[#E5E7EB] rounded-xl p-3.5">
                 <DetailPair label="Rombel Saat Ini" value={detailItem.nama_kelas} />
                 <DetailPair label="Jenis Kelamin" value={detailItem.jenis_kelamin === 'L' ? 'Laki-laki (L)' : 'Perempuan (P)'} />
-                <DetailPair label="TTL" value={`${detailItem.tempat_lahir || '-'}, ${detailItem.tanggal_lahir || '-'}`} />
+                <DetailPair label="TTL" value={`${detailItem.tempat_lahir || '-'}, ${formatDateIndonesia(detailItem.tanggal_lahir)}`} />
                 <DetailPair label="Agama" value={detailItem.agama} />
                 <DetailPair label="Telepon / HP" value={`${detailItem.telepon || '-'} / ${detailItem.hp || detailItem.telepon_ortu || '-'}`} mono />
                 <DetailPair label="E-Mail" value={detailItem.email} />
@@ -1180,12 +1227,12 @@ export function SiswaModule({
           {
             field: 'nis',
             label: 'NIS',
-            existingValues: new Set(students.map((s) => s.nis).filter(Boolean)),
+            existingValues: new Set(students.map((s) => String(s.nis || '').trim()).filter(Boolean)),
           },
           {
             field: 'nisn',
             label: 'NISN',
-            existingValues: new Set(students.map((s) => s.nisn).filter(Boolean)),
+            existingValues: new Set(students.map((s) => String(s.nisn || '').trim()).filter(Boolean)),
           },
         ]}
         onConfirmImport={handleImportConfirm}
@@ -1217,6 +1264,8 @@ const TEACHER_EXCEL_COLS: ExcelColumnSpec[] = [
   { key: 'tanggal_no_sk_terakhir', header: 'TANGGAL DAN NO SK TERAKHIR' },
   { key: 'email_pribadi', header: 'EMAIL PRIBADI' },
   { key: 'email_belajar', header: 'EMAIL BELAJAR' },
+  { key: 'mata_pelajaran', header: 'MATA PELAJARAN' },
+  { key: 'wali_kelas', header: 'WALI KELAS' },
 ];
 
 const TEACHER_NUMERIC_KEYS = new Set([
@@ -1245,6 +1294,7 @@ const EMPTY_TEACHER_FORM: Partial<Teacher> = {
   email_pribadi: '',
   email_belajar: '',
   mata_pelajaran: '',
+  id_kelas: '',
   wali_kelas_id: '',
   wali_kelas: '',
   telepon: '',
@@ -1264,6 +1314,7 @@ export function GuruModule({
 }) {
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [classes, setClasses] = useState<ClassRoom[]>([]);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
@@ -1277,18 +1328,21 @@ export function GuruModule({
   const [importOpen, setImportOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<Partial<Teacher>>(EMPTY_TEACHER_FORM);
+  const [waliStatus, setWaliStatus] = useState<'Wali Kelas' | 'Non Wali Kelas'>('Non Wali Kelas');
 
   const canEdit = user.role === 'ADMIN';
 
   const loadData = async () => {
     setLoading(true);
-    const [tRes, cRes] = await Promise.all([
+    const [tRes, cRes, mRes] = await Promise.all([
       callApi<Teacher[]>('getTeachers'),
       callApi<ClassRoom[]>('getClasses'),
+      callApi<Subject[]>('getSubjects'),
     ]);
     setLoading(false);
     if (tRes.success && tRes.data) setTeachers(tRes.data);
     if (cRes.success && cRes.data) setClasses(cRes.data);
+    if (mRes.success && mRes.data) setSubjects(mRes.data);
   };
 
   useEffect(() => {
@@ -1313,18 +1367,105 @@ export function GuruModule({
       ...EMPTY_TEACHER_FORM,
       no: teachers.length + 1,
     });
+    setWaliStatus('Non Wali Kelas');
     setFormTab('identitas');
     setFormOpen(true);
   };
 
   const openEdit = (t: Teacher) => {
     setEditing(t);
+    const cleanNip = String(t.nip || '').trim();
+    const autoUsername =
+      String(t.username || '').trim() || (cleanNip && cleanNip !== '-' ? cleanNip : '');
+    const isWali =
+      isMapelGuruKelas(t.mata_pelajaran)
+        ? !isExplicitNonWaliValue(t.wali_kelas)
+        : !isNonWaliTeacher(t.mata_pelajaran, t.jabatan) &&
+          Boolean(t.wali_kelas_id) &&
+          t.wali_kelas_id !== 'SEMUA_KELAS' &&
+          !isExplicitNonWaliValue(t.wali_kelas);
+    setWaliStatus(isWali ? 'Wali Kelas' : 'Non Wali Kelas');
     setForm({
       ...EMPTY_TEACHER_FORM,
       ...t,
+      username: autoUsername,
+      tanggal_lahir: normalizeDateYmd(t.tanggal_lahir),
+      tmt_pengangkatan: normalizeDateYmd(t.tmt_pengangkatan),
+      mulai_bekerja_disini: normalizeDateYmd(t.mulai_bekerja_disini),
     });
     setFormTab('identitas');
     setFormOpen(true);
+  };
+
+  const updateFormWithAssignment = (patch: Partial<Teacher>) => {
+    const hasMapelChange = patch.mata_pelajaran !== undefined;
+    const nextIsMapelGuruKelas = hasMapelChange ? isMapelGuruKelas(patch.mata_pelajaran) : null;
+    if (nextIsMapelGuruKelas !== null) {
+      setWaliStatus(nextIsMapelGuruKelas ? 'Wali Kelas' : 'Non Wali Kelas');
+    }
+
+    setForm((prev) => {
+      const merged = { ...prev, ...patch };
+      if (
+        patch.mata_pelajaran !== undefined &&
+        isKepalaSekolah(patch.mata_pelajaran) &&
+        (!merged.jabatan || merged.jabatan === 'Guru Kelas')
+      ) {
+        merged.jabatan = 'Kepala Sekolah';
+      } else if (
+        patch.mata_pelajaran !== undefined &&
+        isMapelGuruKelas(patch.mata_pelajaran) &&
+        merged.jabatan === 'Kepala Sekolah'
+      ) {
+        merged.jabatan = 'Guru Kelas';
+      }
+
+      if (hasMapelChange && !nextIsMapelGuruKelas) {
+        const nonWali = isNonWaliTeacher(merged.mata_pelajaran, merged.jabatan);
+        return {
+          ...merged,
+          id_kelas: nonWali ? 'SEMUA_KELAS' : '',
+          wali_kelas_id: '',
+          wali_kelas: 'Non Wali Kelas',
+        };
+      }
+
+      if (hasMapelChange && nextIsMapelGuruKelas) {
+        const assignment = resolveTeacherClassAssignment(
+          {
+            mata_pelajaran: merged.mata_pelajaran,
+            jabatan: merged.jabatan,
+            wali_kelas_id: '',
+            wali_kelas: '',
+            id_kelas: '',
+          },
+          classes
+        );
+        return {
+          ...merged,
+          id_kelas: assignment.id_kelas,
+          wali_kelas_id: assignment.wali_kelas_id,
+          wali_kelas: assignment.wali_kelas,
+        };
+      }
+
+      const assignment = resolveTeacherClassAssignment(
+        {
+          mata_pelajaran: merged.mata_pelajaran,
+          jabatan: merged.jabatan,
+          wali_kelas_id: merged.wali_kelas_id,
+          wali_kelas: merged.wali_kelas,
+          id_kelas: merged.id_kelas,
+        },
+        classes
+      );
+      return {
+        ...merged,
+        id_kelas: assignment.id_kelas,
+        wali_kelas_id: assignment.wali_kelas_id,
+        wali_kelas: assignment.wali_kelas,
+      };
+    });
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -1334,10 +1475,49 @@ export function GuruModule({
       onToast('warning', 'Validasi', 'Nama guru wajib diisi.');
       return;
     }
-    const waliCls = classes.find((c) => c.id_kelas === form.wali_kelas_id);
+    const cleanNip = String(form.nip || '').trim();
+    const resolvedUsername =
+      String(form.username || '').trim() || (cleanNip && cleanNip !== '-' ? cleanNip : '');
+    const isManualNonWali = waliStatus === 'Non Wali Kelas';
+    const selectedClassObj = classes.find((c) => c.id_kelas === form.wali_kelas_id);
+    const assignment = isManualNonWali
+      ? {
+          id_kelas: isNonWaliTeacher(form.mata_pelajaran, form.jabatan) ? 'SEMUA_KELAS' : '',
+          wali_kelas_id: '',
+          wali_kelas: 'Non Wali Kelas',
+        }
+      : resolveTeacherClassAssignment(
+          {
+            mata_pelajaran: form.mata_pelajaran,
+            jabatan: form.jabatan,
+            wali_kelas_id: form.wali_kelas_id,
+            wali_kelas: isExplicitNonWaliValue(form.wali_kelas) ? '' : form.wali_kelas,
+            id_kelas: form.id_kelas,
+          },
+          classes
+        );
+    const finalWaliId = isManualNonWali
+      ? ''
+      : assignment.wali_kelas_id || selectedClassObj?.id_kelas || '';
+    const finalWaliName = isManualNonWali
+      ? 'Non Wali Kelas'
+      : assignment.wali_kelas || selectedClassObj?.nama_kelas || '';
+    const finalIdKelas = isManualNonWali
+      ? assignment.id_kelas
+      : finalWaliId || assignment.id_kelas;
+
+    if (!isManualNonWali && !finalWaliId) {
+      setFormTab('akun');
+      onToast('warning', 'Validasi', 'Pilih rombel terlebih dahulu.');
+      return;
+    }
+
     const payload = {
       ...form,
-      wali_kelas: waliCls ? waliCls.nama_kelas : form.wali_kelas || '',
+      username: resolvedUsername,
+      id_kelas: finalIdKelas,
+      wali_kelas_id: finalWaliId,
+      wali_kelas: finalWaliName,
     };
     setSaving(true);
     const res = editing
@@ -1371,7 +1551,7 @@ export function GuruModule({
     <div className="space-y-5">
       <PageHeader
         title="Data Guru & Tenaga Pendidik"
-        description="Struktur lengkap 18 kolom pendidik sesuai format sheet database, penugasan wali kelas, dan status kepegawaian."
+        description="Daftar lengkap pendidik, penugasan mata pelajaran, akses kelas, dan status wali kelas."
         actions={
           <>
             {canEdit && (
@@ -1389,7 +1569,23 @@ export function GuruModule({
                   filtered.map((t, idx) =>
                     TEACHER_EXCEL_COLS.map((col) => {
                       if (col.key === 'no') return t.no ?? idx + 1;
+                      if (
+                        col.key === 'wali_kelas' &&
+                        (isNonWaliTeacher(t.mata_pelajaran, t.jabatan) ||
+                          !t.wali_kelas_id ||
+                          isExplicitNonWaliValue(t.wali_kelas))
+                      ) {
+                        return 'Non Wali Kelas';
+                      }
                       const val = (t as unknown as Record<string, string | number | undefined>)[col.key];
+                      if (
+                        col.key === 'tanggal_lahir' ||
+                        col.key === 'tmt_pengangkatan' ||
+                        col.key === 'mulai_bekerja_disini'
+                      ) {
+                        const fmt = formatDateIndonesia(val);
+                        return fmt === '-' ? '' : fmt;
+                      }
                       return val ?? '';
                     })
                   )
@@ -1473,7 +1669,7 @@ export function GuruModule({
             }`}
           >
             <Table2 className="w-3.5 h-3.5" />
-            Tampilan Sheet Lengkap
+            Tampilan Lengkap
           </button>
           <button
             type="button"
@@ -1508,7 +1704,7 @@ export function GuruModule({
       ) : viewMode === 'sheet' ? (
         <div className="bg-white border border-[#E5E7EB] rounded-xl overflow-hidden">
           <div className="px-4 py-2 bg-[#F8FAFC] border-b border-[#E5E7EB] flex items-center justify-between text-xs text-[#64748B]">
-            <span>Menampilkan {filtered.length} pendidik · 18 kolom struktur database</span>
+            <span>Menampilkan {filtered.length} pendidik · {TEACHER_EXCEL_COLS.length} kolom data lengkap</span>
             <span className="hidden sm:inline">Geser tabel ke samping untuk melihat semua kolom</span>
           </div>
           <div className="overflow-x-auto">
@@ -1532,7 +1728,7 @@ export function GuruModule({
                     );
                   })}
                   <th className="px-3 py-2.5 font-semibold border border-[#DDD6FE] whitespace-nowrap">
-                    WALI KELAS
+                    AKSES KELAS
                   </th>
                   <th className="px-3 py-2.5 font-semibold border border-[#DDD6FE] whitespace-nowrap">
                     STATUS AKUN
@@ -1545,13 +1741,33 @@ export function GuruModule({
               <tbody>
                 {filtered.map((t, idx) => {
                   const rec = t as unknown as Record<string, string | number | undefined>;
+                  const isNonWali = isNonWaliTeacher(t.mata_pelajaran, t.jabatan);
+                  const isKepsek = isKepalaSekolah(t.mata_pelajaran, t.jabatan);
+                  const matchedClass = classes.find((c) => c.id_kelas === (t.id_kelas || t.wali_kelas_id));
+                  const aksesKelasLabel =
+                    isKepsek
+                      ? 'Kepala Sekolah'
+                      : isNonWali || t.id_kelas === 'SEMUA_KELAS'
+                        ? 'Guru (Semua Kelas)'
+                        : (matchedClass?.nama_kelas || t.wali_kelas || 'Guru');
                   return (
-                    <tr key={t.id_guru} className="group hover:bg-[#F5F3FF]/60 transition-colors">
+                    <tr key={`${t.id_guru || t.nip || 'guru'}-${idx}`} className="group hover:bg-[#F5F3FF]/60 transition-colors">
                       {TEACHER_EXCEL_COLS.map((col, cIdx) => {
                         let rawVal: string | number | undefined = rec[col.key];
                         if (col.key === 'no') rawVal = t.no ?? idx + 1;
-                        const displayVal =
-                          rawVal !== undefined && rawVal !== null && String(rawVal).trim() !== ''
+                        if (
+                          col.key === 'wali_kelas' &&
+                          (isNonWali || !t.wali_kelas_id || isExplicitNonWaliValue(t.wali_kelas))
+                        ) {
+                          rawVal = 'Non Wali Kelas';
+                        }
+                        const isDateCol =
+                          col.key === 'tanggal_lahir' ||
+                          col.key === 'tmt_pengangkatan' ||
+                          col.key === 'mulai_bekerja_disini';
+                        const displayVal = isDateCol
+                          ? formatDateIndonesia(rawVal)
+                          : rawVal !== undefined && rawVal !== null && String(rawVal).trim() !== ''
                             ? String(rawVal)
                             : '-';
                         const stickyClass =
@@ -1578,7 +1794,7 @@ export function GuruModule({
                         );
                       })}
                       <td className="px-3 py-2 border border-[#E5E7EB] whitespace-nowrap">
-                        {t.wali_kelas || '-'}
+                        {aksesKelasLabel}
                       </td>
                       <td className="px-3 py-2 border border-[#E5E7EB] whitespace-nowrap">
                         <StatusText status={t.status_akun} />
@@ -1631,15 +1847,25 @@ export function GuruModule({
                   <th className="px-4 py-3 font-semibold w-12">NO</th>
                   <th className="px-4 py-3 font-semibold">NIP / NUPTK</th>
                   <th className="px-4 py-3 font-semibold">NAMA</th>
-                  <th className="px-4 py-3 font-semibold">JABATAN / STATUS</th>
+                  <th className="px-4 py-3 font-semibold">MATA PELAJARAN & AKSES KELAS</th>
                   <th className="px-4 py-3 font-semibold">WALI KELAS</th>
                   <th className="px-4 py-3 font-semibold">EMAIL BELAJAR</th>
                   <th className="px-4 py-3 font-semibold text-right">AKSI</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E5E7EB]">
-                {filtered.map((t, idx) => (
-                  <tr key={t.id_guru} className="hover:bg-[#F5F3FF]/50">
+                {filtered.map((t, idx) => {
+                  const isNonWali = isNonWaliTeacher(t.mata_pelajaran, t.jabatan);
+                  const isKepsek = isKepalaSekolah(t.mata_pelajaran, t.jabatan);
+                  const matchedClass = classes.find((c) => c.id_kelas === (t.id_kelas || t.wali_kelas_id));
+                  const aksesKelasDisplay =
+                    isKepsek
+                      ? 'Kepala Sekolah'
+                      : isNonWali || t.id_kelas === 'SEMUA_KELAS'
+                        ? 'Guru (Semua Kelas)'
+                        : (matchedClass?.nama_kelas || t.wali_kelas || 'Guru');
+                  return (
+                  <tr key={`${t.id_guru || t.nip || 'guru'}-${idx}`} className="hover:bg-[#F5F3FF]/50">
                     <td className="px-4 py-3 tabular-nums text-[#64748B]">{t.no || idx + 1}</td>
                     <td className="px-4 py-3 font-mono text-xs tabular-nums">
                       <div className="font-semibold text-[#1E1B4B]">{t.nip || '-'}</div>
@@ -1650,17 +1876,25 @@ export function GuruModule({
                         <UserAvatar src={t.foto_url} name={t.nama_guru} size="sm" />
                         <div className="min-w-0">
                           <div>{t.nama_guru}</div>
-                          <div className="text-xs text-[#64748B]">{t.ijazah_tertinggi || t.mata_pelajaran || '-'}</div>
+                          <div className="text-xs text-[#64748B]">
+                            {t.jabatan || '-'} · {t.status_kepegawaian}
+                          </div>
                         </div>
                       </div>
                     </td>
                     <td className="px-4 py-3 text-xs">
-                      <div className="font-medium text-[#1E1B4B]">{t.jabatan || '-'}</div>
-                      <div className="text-[#64748B]">
-                        {t.status_kepegawaian} {t.pangkat_gol ? `· ${t.pangkat_gol}` : ''}
-                      </div>
+                      <div className="font-medium text-[#1E1B4B]">{t.mata_pelajaran || '-'}</div>
+                      <div className="text-[#64748B]">{aksesKelasDisplay}</div>
                     </td>
-                    <td className="px-4 py-3">{t.wali_kelas || '-'}</td>
+                    <td className="px-4 py-3 text-xs">
+                      {isNonWali || !t.wali_kelas_id || isExplicitNonWaliValue(t.wali_kelas) ? (
+                        <span className="text-[#64748B]">Non Wali Kelas</span>
+                      ) : (
+                        <span className="font-medium text-[#1E1B4B]">
+                          Wali Kelas{t.wali_kelas ? ` (${t.wali_kelas})` : ''}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-xs text-[#64748B]">
                       <div>{t.email_belajar || '-'}</div>
                       <div>{t.email_pribadi || ''}</div>
@@ -1698,7 +1932,8 @@ export function GuruModule({
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1710,7 +1945,7 @@ export function GuruModule({
         open={formOpen}
         onClose={() => setFormOpen(false)}
         title={editing ? 'Edit Data Guru' : 'Tambah Data Guru'}
-        subtitle="Lengkapi formulir sesuai struktur 18 kolom pendidik & tenaga kependidikan."
+        subtitle="Lengkapi formulir sesuai struktur pendidik & tenaga kependidikan."
         maxWidth="max-w-3xl"
       >
         <form onSubmit={handleSave} className="space-y-5">
@@ -1768,12 +2003,30 @@ export function GuruModule({
                   onChange={(v) => setForm({ ...form, nama_guru: v })}
                 />
               </div>
-              <FieldInput label="NIP" value={form.nip} onChange={(v) => setForm({ ...form, nip: v })} />
+              <FieldInput
+                label="NIP"
+                value={form.nip}
+                onChange={(v) =>
+                  setForm((prev) => {
+                    const prevNip = String(prev.nip || '').trim();
+                    const prevUser = String(prev.username || '').trim();
+                    const nextNipClean = v.trim();
+                    const autoUser = nextNipClean && nextNipClean !== '-' ? nextNipClean : '';
+                    const shouldSyncUsername =
+                      !prevUser || prevUser === prevNip || prevUser === '-';
+                    return {
+                      ...prev,
+                      nip: v,
+                      username: shouldSyncUsername ? autoUser : prev.username,
+                    };
+                  })
+                }
+              />
               <FieldInput label="NUPTK" value={form.nuptk} onChange={(v) => setForm({ ...form, nuptk: v })} />
               <FieldInput label="TEMPAT LAHIR" value={form.tempat_lahir} onChange={(v) => setForm({ ...form, tempat_lahir: v })} />
-              <FieldInput label="TANGGAL LAHIR" type="date" value={form.tanggal_lahir} onChange={(v) => setForm({ ...form, tanggal_lahir: v })} />
+              <FieldInput label="TANGGAL LAHIR" type="date" value={normalizeDateYmd(form.tanggal_lahir)} onChange={(v) => setForm({ ...form, tanggal_lahir: v })} />
               <FieldInput label="IJAZAH TERTINGGI" value={form.ijazah_tertinggi} onChange={(v) => setForm({ ...form, ijazah_tertinggi: v })} placeholder="S1 PGSD / S2" />
-              <FieldInput label="JABATAN" value={form.jabatan} onChange={(v) => setForm({ ...form, jabatan: v })} placeholder="Guru Kelas / Guru PJOK / Kepala Sekolah" />
+              <FieldInput label="JABATAN" value={form.jabatan} onChange={(v) => updateFormWithAssignment({ jabatan: v })} placeholder="Guru Kelas / Guru PAI / Guru PJOK / Kepala Sekolah" />
             </div>
           )}
 
@@ -1799,8 +2052,8 @@ export function GuruModule({
                 </select>
               </div>
               <FieldInput label="PANGKAT/GOL" value={form.pangkat_gol} onChange={(v) => setForm({ ...form, pangkat_gol: v })} placeholder="III/a / Pembina IV/a" />
-              <FieldInput label="TMT PENGANGKATAN" type="date" value={form.tmt_pengangkatan} onChange={(v) => setForm({ ...form, tmt_pengangkatan: v })} />
-              <FieldInput label="MULAI BEKERJA DISINI" type="date" value={form.mulai_bekerja_disini} onChange={(v) => setForm({ ...form, mulai_bekerja_disini: v })} />
+              <FieldInput label="TMT PENGANGKATAN" type="date" value={normalizeDateYmd(form.tmt_pengangkatan)} onChange={(v) => setForm({ ...form, tmt_pengangkatan: v })} />
+              <FieldInput label="MULAI BEKERJA DISINI" type="date" value={normalizeDateYmd(form.mulai_bekerja_disini)} onChange={(v) => setForm({ ...form, mulai_bekerja_disini: v })} />
               <FieldInput label="MASA KERJA (THN)" value={form.masa_kerja_thn} onChange={(v) => setForm({ ...form, masa_kerja_thn: v })} />
               <FieldInput label="MASA KERJA (BLN)" value={form.masa_kerja_bln} onChange={(v) => setForm({ ...form, masa_kerja_bln: v })} />
               <div className="sm:col-span-2">
@@ -1816,37 +2069,157 @@ export function GuruModule({
             </div>
           )}
 
-          {formTab === 'akun' && (
+          {formTab === 'akun' && (() => {
+            const formAssignment = resolveTeacherClassAssignment(
+              {
+                mata_pelajaran: form.mata_pelajaran,
+                jabatan: form.jabatan,
+                wali_kelas_id: waliStatus === 'Non Wali Kelas' ? '' : form.wali_kelas_id,
+                wali_kelas: waliStatus === 'Non Wali Kelas' ? 'Non Wali Kelas' : form.wali_kelas,
+                id_kelas: form.id_kelas,
+              },
+              classes
+            );
+            const isFormMapel = formAssignment.isGuruMapel || formAssignment.isPaiPjok;
+            const isFormKepsek = formAssignment.isKepalaSekolah;
+            const cleanNipVal = String(form.nip || '').trim();
+            const displayedUsername =
+              form.username !== undefined && form.username !== ''
+                ? form.username
+                : cleanNipVal && cleanNipVal !== '-'
+                  ? cleanNipVal
+                  : '';
+            return (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <FieldInput
-                label="Mata Pelajaran Diampu"
-                value={form.mata_pelajaran}
-                onChange={(v) => setForm({ ...form, mata_pelajaran: v })}
-              />
+              <div>
+                <label className="block text-xs font-semibold text-[#1E1B4B] mb-1">
+                  Mata Pelajaran Diampu
+                </label>
+                <input
+                  type="text"
+                  list="guru-mapel-presets"
+                  value={form.mata_pelajaran ?? ''}
+                  onChange={(e) => updateFormWithAssignment({ mata_pelajaran: e.target.value })}
+                  placeholder="Contoh: Guru Kelas 1 / PAI / PJOK / Bahasa Inggris / Kepala Sekolah"
+                  className="w-full px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#6D28D9]"
+                />
+                <datalist id="guru-mapel-presets">
+                  <option value="Kepala Sekolah" />
+                  <option value="Guru Kelas 1" />
+                  <option value="Guru Kelas 2" />
+                  <option value="Guru Kelas 3" />
+                  <option value="Guru Kelas 4" />
+                  <option value="Guru Kelas 5" />
+                  <option value="Guru Kelas 6" />
+                  <option value="PAI" />
+                  <option value="PJOK" />
+                  {subjects.map((m) => (
+                    <option key={m.id_mapel} value={m.nama_mapel} />
+                  ))}
+                </datalist>
+              </div>
               <div>
                 <label className="block text-xs font-semibold text-[#1E1B4B] mb-1">Wali Kelas</label>
                 <select
-                  value={form.wali_kelas_id || ''}
+                  value={waliStatus}
                   onChange={(e) => {
-                    const cls = classes.find((c) => c.id_kelas === e.target.value);
-                    setForm({
-                      ...form,
-                      wali_kelas_id: e.target.value,
-                      wali_kelas: cls?.nama_kelas || '',
-                    });
+                    const nextStatus = e.target.value as 'Wali Kelas' | 'Non Wali Kelas';
+                    setWaliStatus(nextStatus);
+                    if (nextStatus === 'Non Wali Kelas') {
+                      setForm((prev) => ({
+                        ...prev,
+                        id_kelas: isNonWaliTeacher(prev.mata_pelajaran, prev.jabatan) ? 'SEMUA_KELAS' : '',
+                        wali_kelas_id: '',
+                        wali_kelas: 'Non Wali Kelas',
+                      }));
+                    } else {
+                      const matched = findMatchingClassForSubject(
+                        form.mata_pelajaran,
+                        form.jabatan,
+                        classes
+                      );
+                      const fallbackCls =
+                        matched ||
+                        classes.find((c) => c.id_kelas === form.wali_kelas_id);
+                      setForm((prev) => ({
+                        ...prev,
+                        id_kelas: fallbackCls?.id_kelas || '',
+                        wali_kelas_id: fallbackCls?.id_kelas || '',
+                        wali_kelas: fallbackCls?.nama_kelas || '',
+                      }));
+                    }
                   }}
                   className="w-full px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg bg-white"
                 >
-                  <option value="">Bukan Wali Kelas</option>
-                  {classes.map((c) => (
-                    <option key={c.id_kelas} value={c.id_kelas}>
-                      {c.nama_kelas}
-                    </option>
-                  ))}
+                  <option value="Wali Kelas">Wali Kelas</option>
+                  <option value="Non Wali Kelas">Non Wali Kelas</option>
                 </select>
               </div>
+              {waliStatus === 'Wali Kelas' && (
+                <div>
+                  <label className="block text-xs font-semibold text-[#1E1B4B] mb-1">
+                    Rombel *
+                  </label>
+                  <select
+                    value={form.wali_kelas_id || formAssignment.wali_kelas_id || ''}
+                    onChange={(e) => {
+                      const cls = classes.find((c) => c.id_kelas === e.target.value);
+                      setForm((prev) => {
+                        const nextMapel =
+                          cls && (!String(prev.mata_pelajaran || '').trim() || isMapelGuruKelas(prev.mata_pelajaran))
+                            ? /^kelas\b/i.test(cls.nama_kelas)
+                              ? `Guru ${cls.nama_kelas}`
+                              : `Guru Kelas ${cls.nama_kelas}`
+                            : prev.mata_pelajaran;
+                        return {
+                          ...prev,
+                          mata_pelajaran: nextMapel,
+                          id_kelas: e.target.value,
+                          wali_kelas_id: e.target.value,
+                          wali_kelas: cls?.nama_kelas || '',
+                        };
+                      });
+                    }}
+                    className="w-full px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg bg-white"
+                  >
+                    <option value="">-- Pilih Rombel --</option>
+                    {[...classes].sort(compareClassesByName).map((c) => (
+                      <option key={c.id_kelas} value={c.id_kelas}>
+                        {c.nama_kelas}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <div>
+                <label className="block text-xs font-semibold text-[#1E1B4B] mb-1">
+                  Akses Kelas (Otomatis sesuai Mapel)
+                </label>
+                <input
+                  type="text"
+                  readOnly
+                  value={
+                    isFormKepsek
+                      ? 'Kepala Sekolah'
+                      : isFormMapel
+                        ? 'Guru (Semua Kelas)'
+                        : waliStatus === 'Wali Kelas'
+                          ? classes.find((c) => c.id_kelas === (form.wali_kelas_id || formAssignment.id_kelas))?.nama_kelas ||
+                            form.wali_kelas ||
+                            formAssignment.wali_kelas ||
+                            'Guru'
+                          : 'Guru'
+                  }
+                  className="w-full px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg bg-[#F8FAFC] text-[#475569]"
+                />
+              </div>
               <FieldInput label="Nomor Telepon" value={form.telepon} onChange={(v) => setForm({ ...form, telepon: v })} />
-              <FieldInput label="Username Akun" value={form.username} onChange={(v) => setForm({ ...form, username: v })} />
+              <FieldInput
+                label="Username Akun"
+                value={displayedUsername}
+                placeholder="Username akun"
+                onChange={(v) => setForm({ ...form, username: v })}
+              />
               <div>
                 <label className="block text-xs font-semibold text-[#1E1B4B] mb-1">Status Akun</label>
                 <select
@@ -1860,8 +2233,18 @@ export function GuruModule({
                   <option value="Nonaktif">Nonaktif</option>
                 </select>
               </div>
+              <div className="sm:col-span-2 rounded-lg border border-[#DDD6FE] bg-[#F5F3FF] px-3.5 py-2.5 text-xs text-[#4C1D95]">
+                {isFormKepsek
+                  ? 'Kepala Sekolah otomatis berstatus Non Wali Kelas, memperoleh akses seluruh kelas (1 s/d 6), dan diselaraskan sebagai akun dengan role Kepala Sekolah.'
+                  : isFormMapel
+                    ? 'Guru Mata Pelajaran (PAI, PJOK, atau Mapel lainnya) otomatis berstatus Non Wali Kelas dan memperoleh akses seluruh kelas (1 s/d 6) dengan menu filter dropdown per kelas.'
+                    : waliStatus === 'Wali Kelas'
+                      ? 'Mapel Guru Kelas otomatis diset sebagai Wali Kelas sesuai kelas ampuannya dan hanya menampilkan data kelas yang diampu.'
+                      : 'Status saat ini Non Wali Kelas. Isi Mata Pelajaran dengan "Guru Kelas 1..6" untuk mengaktifkan Wali Kelas secara otomatis.'}
+              </div>
             </div>
-          )}
+            );
+          })()}
 
           <div className="flex justify-end gap-2.5 pt-3 border-t border-[#E5E7EB]">
             <SecondaryButton onClick={() => setFormOpen(false)}>Batal</SecondaryButton>
@@ -1887,7 +2270,7 @@ export function GuruModule({
                 <div className="min-w-0">
                   <h3 className="text-lg font-bold text-[#1E1B4B] truncate">{detailItem.nama_guru}</h3>
                   <p className="text-xs text-[#64748B] font-mono tabular-nums">
-                    NO: {detailItem.no || '-'} · NIP: {detailItem.nip || '-'} · NUPTK: {detailItem.nuptk || '-'}
+                    NIP: {detailItem.nip || '-'} · NUPTK: {detailItem.nuptk || '-'}
                   </p>
                 </div>
               </div>
@@ -1896,13 +2279,13 @@ export function GuruModule({
 
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-[#F8FAFC] border border-[#E5E7EB] rounded-xl p-4">
               <DetailPair label="Jenis Kelamin" value={detailItem.jenis_kelamin === 'L' ? 'Laki-laki (L)' : 'Perempuan (P)'} />
-              <DetailPair label="Tempat, Tanggal Lahir" value={`${detailItem.tempat_lahir || '-'}, ${detailItem.tanggal_lahir || '-'}`} />
+              <DetailPair label="Tempat, Tanggal Lahir" value={`${detailItem.tempat_lahir || '-'}, ${formatDateIndonesia(detailItem.tanggal_lahir)}`} />
               <DetailPair label="Ijazah Tertinggi" value={detailItem.ijazah_tertinggi} />
               <DetailPair label="Jabatan" value={detailItem.jabatan} />
               <DetailPair label="Status Kepegawaian" value={detailItem.status_kepegawaian} />
               <DetailPair label="Pangkat / Gol" value={detailItem.pangkat_gol} />
-              <DetailPair label="TMT Pengangkatan" value={detailItem.tmt_pengangkatan} mono />
-              <DetailPair label="Mulai Bekerja Disini" value={detailItem.mulai_bekerja_disini} mono />
+              <DetailPair label="TMT Pengangkatan" value={formatDateIndonesia(detailItem.tmt_pengangkatan)} />
+              <DetailPair label="Mulai Bekerja Disini" value={formatDateIndonesia(detailItem.mulai_bekerja_disini)} />
               <DetailPair
                 label="Masa Kerja"
                 value={`${detailItem.masa_kerja_thn || '0'} Thn ${detailItem.masa_kerja_bln || '0'} Bln`}
@@ -1914,8 +2297,27 @@ export function GuruModule({
               <DetailPair label="Email Pribadi" value={detailItem.email_pribadi} />
               <DetailPair label="Email Belajar" value={detailItem.email_belajar} />
               <DetailPair label="Telepon" value={detailItem.telepon} mono />
-              <DetailPair label="Wali Kelas" value={detailItem.wali_kelas} />
+              <DetailPair
+                label="Wali Kelas"
+                value={
+                  isNonWaliTeacher(detailItem.mata_pelajaran, detailItem.jabatan) ||
+                  !detailItem.wali_kelas_id ||
+                  isExplicitNonWaliValue(detailItem.wali_kelas)
+                    ? 'Non Wali Kelas'
+                    : detailItem.wali_kelas
+                      ? `Wali Kelas (${detailItem.wali_kelas})`
+                      : 'Wali Kelas'
+                }
+              />
               <DetailPair label="Mata Pelajaran" value={detailItem.mata_pelajaran} />
+              <DetailPair
+                label="Akses Kelas"
+                value={
+                  isKepalaSekolah(detailItem.mata_pelajaran, detailItem.jabatan)
+                    ? 'Kepala Sekolah'
+                    : 'Guru'
+                }
+              />
               <DetailPair label="Username Akun" value={detailItem.username} mono />
             </div>
           </div>
@@ -1938,14 +2340,43 @@ export function GuruModule({
         templateFilename="Template_Import_Guru_KELASKU_SMART.xlsx"
         sheetName="GURU"
         columns={TEACHER_EXCEL_COLS}
-        onConfirmImport={async (rows) => {
-          const res = await callApi('importTeachers', { rows });
-          if (res.success) {
-            onToast('success', 'Import Berhasil', res.message);
-            loadData();
-          } else {
-            onToast('error', 'Import Gagal', res.message);
+        onConfirmImport={async (rows, setProgress) => {
+          const CHUNK_SIZE = 20;
+          const total = rows.length;
+          let totalImported = 0;
+          let totalSkipped = 0;
+
+          for (let i = 0; i < total; i += CHUNK_SIZE) {
+            const chunk = rows.slice(i, i + CHUNK_SIZE);
+            const isLast = i + CHUNK_SIZE >= total;
+            const doneAfter = Math.min(i + chunk.length, total);
+            setProgress?.(`Mengimpor data guru ${doneAfter} dari ${total}...`);
+            const res = await callApi<{ count?: number; skipped?: number }>('importTeachers', {
+              rows: chunk,
+              skipSync: !isLast,
+            });
+            if (!res.success) {
+              onToast(
+                'error',
+                'Import Gagal',
+                totalImported > 0
+                  ? `${totalImported} data awal berhasil masuk, lalu terhenti: ${res.message}`
+                  : res.message
+              );
+              if (totalImported > 0) loadData();
+              return false;
+            }
+            totalImported += res.data?.count ?? chunk.length;
+            totalSkipped += res.data?.skipped ?? 0;
           }
+
+          onToast(
+            'success',
+            'Import Berhasil',
+            `${totalImported} data guru berhasil diimpor${totalSkipped > 0 ? ` (${totalSkipped} duplikat dilewati).` : '.'}`
+          );
+          loadData();
+          return true;
         }}
       />
     </div>
@@ -1960,9 +2391,12 @@ export function KelasModule({ user, onToast }: { user: AuthUser; onToast: ToastF
   const [classes, setClasses] = useState<ClassRoom[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [years, setYears] = useState<AcademicYear[]>([]);
+  const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<ClassRoom | null>(null);
+  const [tingkatEditedManually, setTingkatEditedManually] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ClassRoom | null>(null);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<Partial<ClassRoom>>({});
@@ -1971,44 +2405,114 @@ export function KelasModule({ user, onToast }: { user: AuthUser; onToast: ToastF
 
   const loadData = async () => {
     setLoading(true);
-    const [cRes, tRes, yRes] = await Promise.all([
+    const [cRes, tRes, yRes, sRes] = await Promise.all([
       callApi<ClassRoom[]>('getClasses'),
       callApi<Teacher[]>('getTeachers'),
       callApi<AcademicYear[]>('getAcademicYears'),
+      callApi<Student[]>('getStudents'),
     ]);
     setLoading(false);
-    if (cRes.success && cRes.data) setClasses(cRes.data);
+    if (cRes.success && cRes.data) {
+      setClasses([...cRes.data].sort(compareClassesByName));
+    } else if (!cRes.success) {
+      onToast('error', 'Gagal memuat data kelas', cRes.message);
+    }
     if (tRes.success && tRes.data) setTeachers(tRes.data);
     if (yRes.success && yRes.data) setYears(yRes.data);
+    if (sRes.success && sRes.data) setStudents(sRes.data);
   };
 
   useEffect(() => {
     loadData();
   }, []);
 
+  const openAddModal = () => {
+    const activeYear = years.find((y) => y.status === 'Aktif');
+    const nextClassId = previewClassIdForName('', '1', classes);
+    setEditing(null);
+    setTingkatEditedManually(false);
+    setForm({
+      id_kelas: nextClassId,
+      nama_kelas: '',
+      tingkat: '1',
+      wali_kelas_id: '',
+      id_tahun_ajaran: activeYear?.id_tahun_ajaran || '',
+      tahun_ajaran: activeYear?.nama_tahun_ajaran || '',
+    });
+    setFormOpen(true);
+  };
+
+  const openEditModal = (c: ClassRoom) => {
+    setEditing(c);
+    setTingkatEditedManually(true);
+    setForm({
+      ...c,
+      id_kelas: c.id_kelas || generateNextClassId(classes),
+      nama_kelas: c.nama_kelas || '',
+      tingkat: c.tingkat || inferTingkatFromClassName(c.nama_kelas) || '1',
+      wali_kelas_id: c.wali_kelas_id || '',
+      id_tahun_ajaran: c.id_tahun_ajaran || '',
+    });
+    setFormOpen(true);
+  };
+
+  const displayedClassId = previewClassIdForName(
+    form.nama_kelas || '',
+    form.tingkat,
+    classes,
+    editing?.id_kelas
+  );
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.nama_kelas?.trim()) return;
+    const namaKelas = String(form.nama_kelas || '').trim();
+    if (!namaKelas) {
+      onToast('warning', 'Nama kelas wajib diisi');
+      return;
+    }
     const wali = teachers.find((t) => t.id_guru === form.wali_kelas_id);
     const yr = years.find((y) => y.id_tahun_ajaran === form.id_tahun_ajaran);
-    const payload = {
+    const assignedId = editing
+      ? editing.id_kelas || form.id_kelas || generateNextClassId(classes)
+      : displayedClassId;
+    const payload: Partial<ClassRoom> = {
       ...form,
-      wali_kelas: wali?.nama_guru || form.wali_kelas || '',
+      id_kelas: assignedId,
+      nama_kelas: namaKelas,
+      tingkat: String(form.tingkat || '').trim() || inferTingkatFromClassName(namaKelas) || '1',
+      wali_kelas_id: form.wali_kelas_id || '',
+      wali_kelas: wali?.nama_guru || (form.wali_kelas_id ? form.wali_kelas || '' : ''),
+      id_tahun_ajaran: form.id_tahun_ajaran || '',
       tahun_ajaran: yr?.nama_tahun_ajaran || form.tahun_ajaran || '',
     };
     setSaving(true);
     const res = editing
-      ? await callApi('updateClass', payload)
-      : await callApi('createClass', payload);
+      ? await callApi<ClassRoom>('updateClass', payload as Record<string, unknown>)
+      : await callApi<ClassRoom>('createClass', payload as Record<string, unknown>);
     setSaving(false);
     if (res.success) {
-      onToast('success', editing ? 'Kelas diperbarui' : 'Kelas ditambahkan');
+      onToast(
+        'success',
+        editing ? 'Kelas diperbarui' : 'Kelas ditambahkan',
+        namaKelas
+      );
       setFormOpen(false);
       loadData();
     } else {
       onToast('error', 'Gagal menyimpan', res.message);
     }
   };
+
+  const filteredClasses = classes.filter((c) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      (c.nama_kelas || '').toLowerCase().includes(q) ||
+      (c.tingkat || '').toLowerCase().includes(q) ||
+      (c.wali_kelas || '').toLowerCase().includes(q) ||
+      (c.tahun_ajaran || '').toLowerCase().includes(q)
+    );
+  });
 
   return (
     <div className="space-y-5">
@@ -2017,19 +2521,7 @@ export function KelasModule({ user, onToast }: { user: AuthUser; onToast: ToastF
         description="Pengelolaan rombongan belajar, tingkat kelas SD (1–6), wali kelas, dan jumlah siswa aktual."
         actions={
           canEdit && (
-            <PrimaryButton
-              onClick={() => {
-                setEditing(null);
-                const activeYear = years.find((y) => y.status === 'Aktif');
-                setForm({
-                  nama_kelas: '',
-                  tingkat: '1',
-                  wali_kelas_id: '',
-                  id_tahun_ajaran: activeYear?.id_tahun_ajaran || '',
-                });
-                setFormOpen(true);
-              }}
-            >
+            <PrimaryButton onClick={openAddModal}>
               <Plus className="w-4 h-4" />
               Tambah Kelas
             </PrimaryButton>
@@ -2037,10 +2529,44 @@ export function KelasModule({ user, onToast }: { user: AuthUser; onToast: ToastF
         }
       />
 
+      {classes.length > 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="relative w-full sm:max-w-sm">
+            <Search className="w-4 h-4 text-[#64748B] absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Cari nama kelas, wali kelas, atau tahun ajaran..."
+              className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-[#E5E7EB] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#6D28D9]/20 focus:border-[#6D28D9]"
+            />
+          </div>
+          <div className="text-xs text-[#64748B] tabular-nums">
+            Menampilkan <strong>{filteredClasses.length}</strong> dari <strong>{classes.length}</strong> kelas
+          </div>
+        </div>
+      )}
+
       {loading ? (
         <TableSkeleton cols={6} rows={4} />
       ) : classes.length === 0 ? (
-        <EmptyState title="Belum ada data kelas" />
+        <EmptyState
+          title="Belum ada data kelas"
+          description="Tambahkan rombongan belajar pertama untuk mulai mengelompokkan siswa dan guru."
+          action={
+            canEdit && (
+              <PrimaryButton onClick={openAddModal}>
+                <Plus className="w-4 h-4" />
+                Tambah Kelas
+              </PrimaryButton>
+            )
+          }
+        />
+      ) : filteredClasses.length === 0 ? (
+        <EmptyState
+          title="Tidak ada hasil pencarian"
+          description={`Tidak ditemukan data kelas untuk kata kunci "${search}".`}
+        />
       ) : (
         <div className="bg-white border border-[#E5E7EB] rounded-xl overflow-hidden">
           <div className="overflow-x-auto">
@@ -2057,26 +2583,43 @@ export function KelasModule({ user, onToast }: { user: AuthUser; onToast: ToastF
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E5E7EB]">
-                {classes.map((c, idx) => (
-                  <tr key={c.id_kelas} className="hover:bg-[#F5F3FF]/50">
+                {filteredClasses.map((c, idx) => {
+                  const classStudents = students.filter((s) => {
+                    if (s.status_siswa === 'Lulus' || s.status_siswa === 'Pindah' || s.status_siswa === 'Nonaktif') return false;
+                    const sCid = String(s.id_kelas || '').trim();
+                    const cCid = String(c.id_kelas || '').trim();
+                    if (sCid && cCid && sCid === cCid) return true;
+                    const sName = String(s.nama_kelas || '').trim().toLowerCase();
+                    const cName = String(c.nama_kelas || '').trim().toLowerCase();
+                    if (sName && cName && sName === cName) return true;
+                    return false;
+                  });
+                  const countL = classStudents.filter((s) => String(s.jenis_kelamin || '').toUpperCase().startsWith('L')).length;
+                  const countP = classStudents.filter((s) => String(s.jenis_kelamin || '').toUpperCase().startsWith('P')).length;
+                  const totalSiswa = Math.max(c.jumlah_siswa ?? 0, classStudents.length);
+
+                  return (
+                  <tr key={`${c.id_kelas || c.nama_kelas || 'kelas'}-${idx}`} className="hover:bg-[#F5F3FF]/50">
                     <td className="px-4 py-3 tabular-nums text-[#64748B]">{idx + 1}</td>
-                    <td className="px-4 py-3 font-semibold text-[#1E1B4B]">{c.nama_kelas}</td>
-                    <td className="px-4 py-3 tabular-nums">Kelas {c.tingkat}</td>
+                    <td className="px-4 py-3 font-semibold text-[#1E1B4B]">{c.nama_kelas || '-'}</td>
+                    <td className="px-4 py-3 tabular-nums">Kelas {c.tingkat || '-'}</td>
                     <td className="px-4 py-3">{c.wali_kelas || '-'}</td>
                     <td className="px-4 py-3 tabular-nums">{c.tahun_ajaran || '-'}</td>
-                    <td className="px-4 py-3 text-right font-mono tabular-nums font-semibold">
-                      {c.jumlah_siswa ?? 0}
+                    <td className="px-4 py-3 text-right font-mono tabular-nums">
+                      <div className="font-semibold text-[#1E1B4B]">
+                        {totalSiswa} Siswa
+                      </div>
+                      <div className="text-[11px] text-[#64748B]">
+                        <span className="text-[#2563EB] font-medium">{countL} L</span> · <span className="text-[#DB2777] font-medium">{countP} P</span>
+                      </div>
                     </td>
                     {canEdit && (
                       <td className="px-4 py-3 text-right">
                         <div className="inline-flex gap-1">
                           <button
                             type="button"
-                            onClick={() => {
-                              setEditing(c);
-                              setForm({ ...c });
-                              setFormOpen(true);
-                            }}
+                            onClick={() => openEditModal(c)}
+                            title="Edit Kelas"
                             className="p-1.5 rounded-lg text-[#64748B] hover:text-[#6D28D9] hover:bg-[#EDE9FE] cursor-pointer"
                           >
                             <Edit3 className="w-4 h-4" />
@@ -2084,6 +2627,7 @@ export function KelasModule({ user, onToast }: { user: AuthUser; onToast: ToastF
                           <button
                             type="button"
                             onClick={() => setDeleteTarget(c)}
+                            title="Hapus Kelas"
                             className="p-1.5 rounded-lg text-[#64748B] hover:text-[#DC2626] hover:bg-red-50 cursor-pointer"
                           >
                             <Trash2 className="w-4 h-4" />
@@ -2092,7 +2636,8 @@ export function KelasModule({ user, onToast }: { user: AuthUser; onToast: ToastF
                       </td>
                     )}
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -2112,7 +2657,15 @@ export function KelasModule({ user, onToast }: { user: AuthUser; onToast: ToastF
               type="text"
               required
               value={form.nama_kelas || ''}
-              onChange={(e) => setForm({ ...form, nama_kelas: e.target.value })}
+              onChange={(e) => {
+                const nextNama = e.target.value;
+                const inferred = inferTingkatFromClassName(nextNama);
+                setForm((prev) => ({
+                  ...prev,
+                  nama_kelas: nextNama,
+                  tingkat: !editing && !tingkatEditedManually && inferred ? inferred : prev.tingkat,
+                }));
+              }}
               placeholder="Contoh: Kelas 1A"
               className="w-full px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg"
             />
@@ -2121,7 +2674,10 @@ export function KelasModule({ user, onToast }: { user: AuthUser; onToast: ToastF
             <label className="block text-xs font-semibold mb-1">Tingkat (SD)</label>
             <select
               value={form.tingkat || '1'}
-              onChange={(e) => setForm({ ...form, tingkat: e.target.value })}
+              onChange={(e) => {
+                setTingkatEditedManually(true);
+                setForm({ ...form, tingkat: e.target.value });
+              }}
               className="w-full px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg bg-white"
             >
               {['1', '2', '3', '4', '5', '6'].map((t) => (
@@ -2139,12 +2695,17 @@ export function KelasModule({ user, onToast }: { user: AuthUser; onToast: ToastF
               className="w-full px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg bg-white"
             >
               <option value="">-- Pilih Wali Kelas --</option>
-              {teachers.map((t) => (
-                <option key={t.id_guru} value={t.id_guru}>
-                  {t.nama_guru}
-                </option>
-              ))}
+              {teachers
+                .filter((t) => !isNonWaliTeacher(t.mata_pelajaran, t.jabatan))
+                .map((t) => (
+                  <option key={t.id_guru} value={t.id_guru}>
+                    {t.nama_guru}
+                  </option>
+                ))}
             </select>
+            <p className="text-[11px] text-[#64748B] mt-1">
+              Guru PAI, PJOK, dan Kepala Sekolah tidak ditampilkan karena bukan sebagai Wali Kelas.
+            </p>
           </div>
           <div>
             <label className="block text-xs font-semibold mb-1">Tahun Ajaran</label>
@@ -2176,7 +2737,10 @@ export function KelasModule({ user, onToast }: { user: AuthUser; onToast: ToastF
         onConfirm={async () => {
           if (!deleteTarget) return;
           setSaving(true);
-          const res = await callApi('deleteClass', { id_kelas: deleteTarget.id_kelas });
+          const res = await callApi('deleteClass', {
+            id_kelas: deleteTarget.id_kelas,
+            nama_kelas: deleteTarget.nama_kelas,
+          });
           setSaving(false);
           if (res.success) {
             onToast('success', 'Kelas dihapus');
@@ -2188,7 +2752,7 @@ export function KelasModule({ user, onToast }: { user: AuthUser; onToast: ToastF
         }}
         loading={saving}
         title="Hapus Kelas"
-        message={`Hapus kelas "${deleteTarget?.nama_kelas}"?`}
+        message={`Hapus kelas "${deleteTarget?.nama_kelas}" (${deleteTarget?.id_kelas || '-'})?`}
       />
     </div>
   );
@@ -2201,11 +2765,16 @@ export function KelasModule({ user, onToast }: { user: AuthUser; onToast: ToastF
 export function MapelModule({ user, onToast }: { user: AuthUser; onToast: ToastFn }) {
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Subject | null>(null);
+  const [kodeEditedManually, setKodeEditedManually] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Subject | null>(null);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<Partial<Subject>>({
+    id_mapel: '',
+    kode_mapel: '',
+    nama_mapel: '',
     kelompok: 'Wajib',
     alokasi_waktu: 2,
     status_aktif: 'Aktif',
@@ -2217,23 +2786,83 @@ export function MapelModule({ user, onToast }: { user: AuthUser; onToast: ToastF
     setLoading(true);
     const res = await callApi<Subject[]>('getSubjects');
     setLoading(false);
-    if (res.success && res.data) setSubjects(res.data);
+    if (res.success && res.data) {
+      setSubjects(res.data);
+    } else if (!res.success) {
+      onToast('error', 'Gagal memuat mata pelajaran', res.message);
+    }
   };
 
   useEffect(() => {
     loadData();
   }, []);
 
+  const openAddModal = () => {
+    const nextId = generateNextSubjectId(subjects);
+    setEditing(null);
+    setKodeEditedManually(false);
+    setForm({
+      id_mapel: nextId,
+      kode_mapel: '',
+      nama_mapel: '',
+      kelompok: 'Wajib',
+      alokasi_waktu: 4,
+      status_aktif: 'Aktif',
+    });
+    setFormOpen(true);
+  };
+
+  const openEditModal = (m: Subject) => {
+    setEditing(m);
+    setKodeEditedManually(true);
+    setForm({
+      ...m,
+      id_mapel: m.id_mapel || generateNextSubjectId(subjects),
+      kode_mapel: m.kode_mapel || '',
+      nama_mapel: m.nama_mapel || '',
+      kelompok: m.kelompok || 'Wajib',
+      alokasi_waktu: Number(m.alokasi_waktu) > 0 ? Number(m.alokasi_waktu) : 2,
+      status_aktif: m.status_aktif || 'Aktif',
+    });
+    setFormOpen(true);
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.kode_mapel?.trim() || !form.nama_mapel?.trim()) return;
+    const nama = String(form.nama_mapel || '').trim();
+    const kode = String(form.kode_mapel || '').trim().toUpperCase() || suggestSubjectCode(nama, subjects);
+
+    if (!nama) {
+      onToast('warning', 'Nama mata pelajaran wajib diisi');
+      return;
+    }
+    if (!kode) {
+      onToast('warning', 'Kode mata pelajaran wajib diisi');
+      return;
+    }
+
+    const payload: Partial<Subject> = {
+      ...form,
+      id_mapel: editing ? form.id_mapel || editing.id_mapel : form.id_mapel || generateNextSubjectId(subjects),
+      kode_mapel: kode,
+      nama_mapel: nama,
+      kelompok: form.kelompok || 'Wajib',
+      alokasi_waktu: Number(form.alokasi_waktu) > 0 ? Number(form.alokasi_waktu) : 2,
+      status_aktif: form.status_aktif || 'Aktif',
+    };
+
     setSaving(true);
     const res = editing
-      ? await callApi('updateSubject', form)
-      : await callApi('createSubject', form);
+      ? await callApi<Subject>('updateSubject', payload as Record<string, unknown>)
+      : await callApi<Subject>('createSubject', payload as Record<string, unknown>);
     setSaving(false);
+
     if (res.success) {
-      onToast('success', editing ? 'Mata pelajaran diperbarui' : 'Mata pelajaran ditambahkan');
+      onToast(
+        'success',
+        editing ? 'Mata pelajaran diperbarui' : 'Mata pelajaran ditambahkan',
+        kode
+      );
       setFormOpen(false);
       loadData();
     } else {
@@ -2241,26 +2870,24 @@ export function MapelModule({ user, onToast }: { user: AuthUser; onToast: ToastF
     }
   };
 
+  const filteredSubjects = subjects.filter((m) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      (m.kode_mapel || '').toLowerCase().includes(q) ||
+      (m.nama_mapel || '').toLowerCase().includes(q) ||
+      (m.kelompok || '').toLowerCase().includes(q)
+    );
+  });
+
   return (
     <div className="space-y-5">
       <PageHeader
         title="Mata Pelajaran"
-        description="Daftar mata pelajaran dinamis yang digunakan pada jadwal, input nilai, dan rekap nilai."
+        description="Daftar mata pelajaran yang digunakan pada jadwal, input nilai, dan rekap nilai."
         actions={
           canEdit && (
-            <PrimaryButton
-              onClick={() => {
-                setEditing(null);
-                setForm({
-                  kode_mapel: '',
-                  nama_mapel: '',
-                  kelompok: 'Wajib',
-                  alokasi_waktu: 4,
-                  status_aktif: 'Aktif',
-                });
-                setFormOpen(true);
-              }}
-            >
+            <PrimaryButton onClick={openAddModal}>
               <Plus className="w-4 h-4" />
               Tambah Mata Pelajaran
             </PrimaryButton>
@@ -2268,10 +2895,44 @@ export function MapelModule({ user, onToast }: { user: AuthUser; onToast: ToastF
         }
       />
 
+      {subjects.length > 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="relative w-full sm:max-w-sm">
+            <Search className="w-4 h-4 text-[#64748B] absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Cari kode, nama mapel, atau kelompok..."
+              className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-[#E5E7EB] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#6D28D9]/20 focus:border-[#6D28D9]"
+            />
+          </div>
+          <div className="text-xs text-[#64748B] tabular-nums">
+            Menampilkan <strong>{filteredSubjects.length}</strong> dari <strong>{subjects.length}</strong> mata pelajaran
+          </div>
+        </div>
+      )}
+
       {loading ? (
         <TableSkeleton cols={6} rows={4} />
       ) : subjects.length === 0 ? (
-        <EmptyState title="Belum ada mata pelajaran" />
+        <EmptyState
+          title="Belum ada mata pelajaran"
+          description="Tambahkan mata pelajaran pertama untuk mulai menyusun jadwal dan penilaian."
+          action={
+            canEdit && (
+              <PrimaryButton onClick={openAddModal}>
+                <Plus className="w-4 h-4" />
+                Tambah Mata Pelajaran
+              </PrimaryButton>
+            )
+          }
+        />
+      ) : filteredSubjects.length === 0 ? (
+        <EmptyState
+          title="Tidak ada hasil pencarian"
+          description={`Tidak ditemukan mata pelajaran untuk kata kunci "${search}".`}
+        />
       ) : (
         <div className="bg-white border border-[#E5E7EB] rounded-xl overflow-hidden">
           <div className="overflow-x-auto">
@@ -2288,26 +2949,23 @@ export function MapelModule({ user, onToast }: { user: AuthUser; onToast: ToastF
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E5E7EB]">
-                {subjects.map((m, idx) => (
-                  <tr key={m.id_mapel} className="hover:bg-[#F5F3FF]/50">
+                {filteredSubjects.map((m, idx) => (
+                  <tr key={`${m.id_mapel || m.kode_mapel || 'mapel'}-${idx}`} className="hover:bg-[#F5F3FF]/50">
                     <td className="px-4 py-3 tabular-nums text-[#64748B]">{idx + 1}</td>
-                    <td className="px-4 py-3 font-mono text-xs font-semibold">{m.kode_mapel}</td>
-                    <td className="px-4 py-3 font-medium text-[#1E1B4B]">{m.nama_mapel}</td>
-                    <td className="px-4 py-3 text-xs text-[#64748B]">{m.kelompok}</td>
-                    <td className="px-4 py-3 text-right tabular-nums">{m.alokasi_waktu} JP</td>
+                    <td className="px-4 py-3 font-mono text-xs font-semibold">{m.kode_mapel || '-'}</td>
+                    <td className="px-4 py-3 font-medium text-[#1E1B4B]">{m.nama_mapel || '-'}</td>
+                    <td className="px-4 py-3 text-xs text-[#64748B]">{m.kelompok || '-'}</td>
+                    <td className="px-4 py-3 text-right tabular-nums">{m.alokasi_waktu ?? 0} JP</td>
                     <td className="px-4 py-3">
-                      <StatusText status={m.status_aktif} />
+                      <StatusText status={m.status_aktif || 'Aktif'} />
                     </td>
                     {canEdit && (
                       <td className="px-4 py-3 text-right">
                         <div className="inline-flex gap-1">
                           <button
                             type="button"
-                            onClick={() => {
-                              setEditing(m);
-                              setForm({ ...m });
-                              setFormOpen(true);
-                            }}
+                            onClick={() => openEditModal(m)}
+                            title="Edit Mata Pelajaran"
                             className="p-1.5 rounded-lg text-[#64748B] hover:text-[#6D28D9] hover:bg-[#EDE9FE] cursor-pointer"
                           >
                             <Edit3 className="w-4 h-4" />
@@ -2315,6 +2973,7 @@ export function MapelModule({ user, onToast }: { user: AuthUser; onToast: ToastF
                           <button
                             type="button"
                             onClick={() => setDeleteTarget(m)}
+                            title="Hapus Mata Pelajaran"
                             className="p-1.5 rounded-lg text-[#64748B] hover:text-[#DC2626] hover:bg-red-50 cursor-pointer"
                           >
                             <Trash2 className="w-4 h-4" />
@@ -2338,25 +2997,56 @@ export function MapelModule({ user, onToast }: { user: AuthUser; onToast: ToastF
       >
         <form onSubmit={handleSave} className="space-y-4">
           <div>
-            <label className="block text-xs font-semibold mb-1">Kode Mapel *</label>
-            <input
-              type="text"
-              required
-              value={form.kode_mapel || ''}
-              onChange={(e) => setForm({ ...form, kode_mapel: e.target.value })}
-              placeholder="Contoh: MTK"
-              className="w-full px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg"
-            />
-          </div>
-          <div>
             <label className="block text-xs font-semibold mb-1">Nama Mata Pelajaran *</label>
             <input
               type="text"
               required
               value={form.nama_mapel || ''}
-              onChange={(e) => setForm({ ...form, nama_mapel: e.target.value })}
+              onChange={(e) => {
+                const nextNama = e.target.value;
+                setForm((prev) => ({
+                  ...prev,
+                  nama_mapel: nextNama,
+                  kode_mapel:
+                    !editing && !kodeEditedManually
+                      ? suggestSubjectCode(nextNama, subjects)
+                      : prev.kode_mapel,
+                }));
+              }}
               placeholder="Contoh: Matematika"
               className="w-full px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg"
+            />
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs font-semibold">Kode Mapel *</label>
+              {!editing && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const suggested = suggestSubjectCode(form.nama_mapel || '', subjects);
+                    if (suggested) {
+                      setKodeEditedManually(false);
+                      setForm((prev) => ({ ...prev, kode_mapel: suggested }));
+                    }
+                  }}
+                  className="text-[11px] font-semibold text-[#6D28D9] hover:underline cursor-pointer"
+                >
+                  Generate dari Nama
+                </button>
+              )}
+            </div>
+            <input
+              type="text"
+              required
+              value={form.kode_mapel || ''}
+              onChange={(e) => {
+                const val = e.target.value.toUpperCase();
+                setKodeEditedManually(val.trim() !== '');
+                setForm({ ...form, kode_mapel: val });
+              }}
+              placeholder="Contoh: MTK (otomatis terisi dari nama)"
+              className="w-full px-3 py-2 text-sm font-mono uppercase border border-[#E5E7EB] rounded-lg"
             />
           </div>
           <div>
@@ -2413,7 +3103,10 @@ export function MapelModule({ user, onToast }: { user: AuthUser; onToast: ToastF
         onConfirm={async () => {
           if (!deleteTarget) return;
           setSaving(true);
-          const res = await callApi('deleteSubject', { id_mapel: deleteTarget.id_mapel });
+          const res = await callApi('deleteSubject', {
+            id_mapel: deleteTarget.id_mapel,
+            kode_mapel: deleteTarget.kode_mapel,
+          });
           setSaving(false);
           if (res.success) {
             onToast('success', 'Mata pelajaran dihapus');
@@ -2425,7 +3118,7 @@ export function MapelModule({ user, onToast }: { user: AuthUser; onToast: ToastF
         }}
         loading={saving}
         title="Hapus Mata Pelajaran"
-        message={`Hapus mata pelajaran "${deleteTarget?.nama_mapel}"?`}
+        message={`Hapus mata pelajaran "${deleteTarget?.nama_mapel}" (${deleteTarget?.kode_mapel || '-'})?`}
       />
     </div>
   );
@@ -2554,7 +3247,7 @@ export function TahunAjaranModule({
               </thead>
               <tbody className="divide-y divide-[#E5E7EB]">
                 {years.map((y, idx) => (
-                  <tr key={y.id_tahun_ajaran} className="hover:bg-[#F5F3FF]/50">
+                  <tr key={`${y.id_tahun_ajaran || y.nama_tahun_ajaran || 'ta'}-${idx}`} className="hover:bg-[#F5F3FF]/50">
                     <td className="px-4 py-3 tabular-nums text-[#64748B]">{idx + 1}</td>
                     <td className="px-4 py-3 font-semibold text-[#1E1B4B] tabular-nums">
                       {y.nama_tahun_ajaran}

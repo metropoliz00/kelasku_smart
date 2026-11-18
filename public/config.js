@@ -6,6 +6,6 @@
 window.KELASKU_CONFIG = {
   APP_NAME: "KELASKU SMART",
   TAGLINE: "SCHOOL MANAGEMENT PLATFORM",
-  GAS_WEB_APP_URL: "https://script.google.com/macros/s/AKfycbypA5Ij1PF06CP17jXMy1OIpjrEnP1ny1Pz_GPy72wKTgEMHDkjDVZssBsplnJKrZ43/exec",
-  REQUEST_TIMEOUT_MS: 25000
+  GAS_WEB_APP_URL: "https://script.google.com/macros/s/AKfycbzMQ8FNfhHQ7EzeekQQZFsHltDq7OfEmTtyR9XygCIIaWMtwQCqYUIXU0mw0Nrhu0fq/exec",
+  REQUEST_TIMEOUT_MS: 120000
 };

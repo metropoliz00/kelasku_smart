@@ -4,10 +4,13 @@ import { callApi } from '../services/api';
 import {
   AchievementRecord,
   AuthUser,
+  CHARACTER_ASPECTS,
   CharacterAspect,
   CharacterRecord,
+  ClassRoom,
   CounselingRecord,
   HealthRecord,
+  normalizeCharacterAspect,
   SchoolIdentity,
   Student,
 } from '../types';
@@ -25,17 +28,6 @@ import { generatePdfReport } from '../utils/pdf';
 
 type ToastFn = (type: 'success' | 'error' | 'warning' | 'info', title: string, message?: string) => void;
 
-const CHARACTER_ASPECTS: CharacterAspect[] = [
-  'Religius',
-  'Disiplin',
-  'Tanggung Jawab',
-  'Mandiri',
-  'Gotong Royong',
-  'Bernalar Kritis',
-  'Kreatif',
-  'Kepedulian Sosial',
-];
-
 // ============================================================================
 // 1. KARAKTER SISWA
 // ============================================================================
@@ -51,7 +43,9 @@ export function KarakterModule({
 }) {
   const [records, setRecords] = useState<CharacterRecord[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
+  const [classes, setClasses] = useState<ClassRoom[]>([]);
   const [loading, setLoading] = useState(true);
+  const [filterClass, setFilterClass] = useState('');
   const [filterStudent, setFilterStudent] = useState('');
   const [filterAspect, setFilterAspect] = useState('');
   const [formOpen, setFormOpen] = useState(false);
@@ -60,7 +54,7 @@ export function KarakterModule({
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<Partial<CharacterRecord>>({
     tanggal: new Date().toISOString().slice(0, 10),
-    aspek: 'Religius',
+    aspek: CHARACTER_ASPECTS[0],
     nilai_perkembangan: 'Berkembang Sesuai Harapan',
   });
 
@@ -68,22 +62,29 @@ export function KarakterModule({
 
   const loadData = async () => {
     setLoading(true);
-    const [rRes, sRes] = await Promise.all([
+    const [rRes, sRes, cRes] = await Promise.all([
       callApi<CharacterRecord[]>('getCharacters'),
       callApi<Student[]>('getStudents'),
+      callApi<ClassRoom[]>('getClasses'),
     ]);
     setLoading(false);
     if (rRes.success && rRes.data) setRecords(rRes.data);
     if (sRes.success && sRes.data) setStudents(sRes.data);
+    if (cRes.success && cRes.data) setClasses(cRes.data);
   };
 
   useEffect(() => {
     loadData();
   }, []);
 
+  const classFilteredStudents = students.filter(
+    (s) => !filterClass || s.id_kelas === filterClass
+  );
+
   const filtered = records.filter((r) => {
+    if (filterClass && r.id_kelas !== filterClass) return false;
     if (filterStudent && r.id_siswa !== filterStudent) return false;
-    if (filterAspect && r.aspek !== filterAspect) return false;
+    if (filterAspect && normalizeCharacterAspect(r.aspek) !== filterAspect) return false;
     return true;
   });
 
@@ -116,7 +117,7 @@ export function KarakterModule({
     <div className="space-y-5">
       <PageHeader
         title={user.role === 'ORANG_TUA' ? 'Perkembangan Karakter Anak' : 'Karakter Siswa'}
-        description="Observasi 8 aspek profil karakter: Religius, Disiplin, Tanggung Jawab, Mandiri, Gotong Royong, Bernalar Kritis, Kreatif, Kepedulian Sosial."
+        description="Observasi 8 indikator karakter: Keimanan dan Ketaqwaan terhadap Tuhan YME, Kewargaan, Penalaran Kritis, Kreativitas, Kolaborasi, Kemandirian, Kesehatan, dan Komunikasi."
         actions={
           <>
             <SecondaryButton
@@ -132,7 +133,7 @@ export function KarakterModule({
                     r.tanggal,
                     r.nama_siswa,
                     r.nama_kelas,
-                    r.aspek,
+                    normalizeCharacterAspect(r.aspek),
                     r.nilai_perkembangan,
                     r.catatan,
                     r.tindak_lanjut,
@@ -151,7 +152,7 @@ export function KarakterModule({
                   setForm({
                     tanggal: new Date().toISOString().slice(0, 10),
                     id_siswa: students[0]?.id_siswa || '',
-                    aspek: 'Religius',
+                    aspek: CHARACTER_ASPECTS[0],
                     nilai_perkembangan: 'Berkembang Sesuai Harapan',
                     catatan: '',
                     tindak_lanjut: '',
@@ -167,7 +168,39 @@ export function KarakterModule({
         }
       />
 
-      <div className="bg-white border border-[#E5E7EB] rounded-xl p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div
+        className={`bg-white border border-[#E5E7EB] rounded-xl p-4 grid grid-cols-1 gap-3 ${
+          user.role !== 'ORANG_TUA' && classes.length > 0
+            ? 'sm:grid-cols-3'
+            : user.role !== 'ORANG_TUA'
+            ? 'sm:grid-cols-2'
+            : ''
+        }`}
+      >
+        {user.role !== 'ORANG_TUA' && classes.length > 0 && (
+          <select
+            value={filterClass}
+            onChange={(e) => {
+              const nextClass = e.target.value;
+              setFilterClass(nextClass);
+              if (
+                nextClass &&
+                filterStudent &&
+                !students.some((s) => s.id_siswa === filterStudent && s.id_kelas === nextClass)
+              ) {
+                setFilterStudent('');
+              }
+            }}
+            className="px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg bg-white"
+          >
+            <option value="">Semua Kelas</option>
+            {classes.map((c) => (
+              <option key={c.id_kelas} value={c.id_kelas}>
+                {c.nama_kelas}
+              </option>
+            ))}
+          </select>
+        )}
         {user.role !== 'ORANG_TUA' && (
           <select
             value={filterStudent}
@@ -175,7 +208,7 @@ export function KarakterModule({
             className="px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg bg-white"
           >
             <option value="">Semua Siswa</option>
-            {students.map((s) => (
+            {classFilteredStudents.map((s) => (
               <option key={s.id_siswa} value={s.id_siswa}>
                 {s.nama_lengkap} ({s.nama_kelas})
               </option>
@@ -224,7 +257,7 @@ export function KarakterModule({
                       <div className="font-medium text-[#1E1B4B]">{r.nama_siswa}</div>
                       <div className="text-xs text-[#64748B]">{r.nama_kelas}</div>
                     </td>
-                    <td className="px-4 py-3 font-medium">{r.aspek}</td>
+                    <td className="px-4 py-3 font-medium">{normalizeCharacterAspect(r.aspek)}</td>
                     <td className="px-4 py-3">
                       <StatusText status={r.nilai_perkembangan} />
                     </td>
@@ -239,7 +272,7 @@ export function KarakterModule({
                             type="button"
                             onClick={() => {
                               setEditing(r);
-                              setForm({ ...r });
+                              setForm({ ...r, aspek: normalizeCharacterAspect(r.aspek) });
                               setFormOpen(true);
                             }}
                             className="p-1.5 rounded-lg text-[#64748B] hover:text-[#6D28D9] hover:bg-[#EDE9FE] cursor-pointer"
@@ -298,9 +331,9 @@ export function KarakterModule({
               </select>
             </div>
             <div>
-              <label className="block text-xs font-semibold mb-1">Aspek Karakter</label>
+              <label className="block text-xs font-semibold mb-1">Indikator / Aspek Karakter</label>
               <select
-                value={form.aspek || 'Religius'}
+                value={form.aspek || CHARACTER_ASPECTS[0]}
                 onChange={(e) => setForm({ ...form, aspek: e.target.value as CharacterAspect })}
                 className="w-full px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg bg-white"
               >
@@ -387,6 +420,8 @@ export function KarakterModule({
 export function KesehatanModule({ user, onToast }: { user: AuthUser; onToast: ToastFn }) {
   const [records, setRecords] = useState<HealthRecord[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
+  const [classes, setClasses] = useState<ClassRoom[]>([]);
+  const [filterClass, setFilterClass] = useState('');
   const [loading, setLoading] = useState(true);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<HealthRecord | null>(null);
@@ -400,18 +435,22 @@ export function KesehatanModule({ user, onToast }: { user: AuthUser; onToast: To
 
   const loadData = async () => {
     setLoading(true);
-    const [rRes, sRes] = await Promise.all([
+    const [rRes, sRes, cRes] = await Promise.all([
       callApi<HealthRecord[]>('getHealthRecords'),
       callApi<Student[]>('getStudents'),
+      callApi<ClassRoom[]>('getClasses'),
     ]);
     setLoading(false);
     if (rRes.success && rRes.data) setRecords(rRes.data);
     if (sRes.success && sRes.data) setStudents(sRes.data);
+    if (cRes.success && cRes.data) setClasses(cRes.data);
   };
 
   useEffect(() => {
     loadData();
   }, []);
+
+  const filtered = records.filter((r) => !filterClass || r.id_kelas === filterClass);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -465,9 +504,27 @@ export function KesehatanModule({ user, onToast }: { user: AuthUser; onToast: To
         }
       />
 
+      {classes.length > 0 && (
+        <div className="bg-white border border-[#E5E7EB] rounded-xl p-4 flex flex-wrap items-center gap-3">
+          <label className="text-xs font-semibold text-[#1E1B4B]">Filter Kelas</label>
+          <select
+            value={filterClass}
+            onChange={(e) => setFilterClass(e.target.value)}
+            className="w-full sm:w-64 px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg bg-white"
+          >
+            <option value="">Semua Kelas</option>
+            {classes.map((c) => (
+              <option key={c.id_kelas} value={c.id_kelas}>
+                {c.nama_kelas}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {loading ? (
         <TableSkeleton cols={5} rows={4} />
-      ) : records.length === 0 ? (
+      ) : filtered.length === 0 ? (
         <EmptyState title="Belum ada catatan kesehatan siswa" />
       ) : (
         <div className="bg-white border border-[#E5E7EB] rounded-xl overflow-hidden">
@@ -484,7 +541,7 @@ export function KesehatanModule({ user, onToast }: { user: AuthUser; onToast: To
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E5E7EB]">
-                {records.map((r) => (
+                {filtered.map((r) => (
                   <tr key={r.id_kesehatan} className="hover:bg-[#F5F3FF]/50 align-top">
                     <td className="px-4 py-3 font-mono text-xs tabular-nums whitespace-nowrap">
                       {r.tanggal}
@@ -644,6 +701,8 @@ export function KesehatanModule({ user, onToast }: { user: AuthUser; onToast: To
 export function BimbinganModule({ user, onToast }: { user: AuthUser; onToast: ToastFn }) {
   const [records, setRecords] = useState<CounselingRecord[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
+  const [classes, setClasses] = useState<ClassRoom[]>([]);
+  const [filterClass, setFilterClass] = useState('');
   const [loading, setLoading] = useState(true);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<CounselingRecord | null>(null);
@@ -658,18 +717,22 @@ export function BimbinganModule({ user, onToast }: { user: AuthUser; onToast: To
 
   const loadData = async () => {
     setLoading(true);
-    const [rRes, sRes] = await Promise.all([
+    const [rRes, sRes, cRes] = await Promise.all([
       callApi<CounselingRecord[]>('getCounselingRecords'),
       callApi<Student[]>('getStudents'),
+      callApi<ClassRoom[]>('getClasses'),
     ]);
     setLoading(false);
     if (rRes.success && rRes.data) setRecords(rRes.data);
     if (sRes.success && sRes.data) setStudents(sRes.data);
+    if (cRes.success && cRes.data) setClasses(cRes.data);
   };
 
   useEffect(() => {
     loadData();
   }, []);
+
+  const filtered = records.filter((r) => !filterClass || r.id_kelas === filterClass);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -724,9 +787,27 @@ export function BimbinganModule({ user, onToast }: { user: AuthUser; onToast: To
         }
       />
 
+      {classes.length > 0 && (
+        <div className="bg-white border border-[#E5E7EB] rounded-xl p-4 flex flex-wrap items-center gap-3">
+          <label className="text-xs font-semibold text-[#1E1B4B]">Filter Kelas</label>
+          <select
+            value={filterClass}
+            onChange={(e) => setFilterClass(e.target.value)}
+            className="w-full sm:w-64 px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg bg-white"
+          >
+            <option value="">Semua Kelas</option>
+            {classes.map((c) => (
+              <option key={c.id_kelas} value={c.id_kelas}>
+                {c.nama_kelas}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {loading ? (
         <TableSkeleton cols={6} rows={4} />
-      ) : records.length === 0 ? (
+      ) : filtered.length === 0 ? (
         <EmptyState title="Belum ada catatan bimbingan dan konseling" />
       ) : (
         <div className="bg-white border border-[#E5E7EB] rounded-xl overflow-hidden">
@@ -743,7 +824,7 @@ export function BimbinganModule({ user, onToast }: { user: AuthUser; onToast: To
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E5E7EB]">
-                {records.map((r) => (
+                {filtered.map((r) => (
                   <tr key={r.id_bimbingan} className="hover:bg-[#F5F3FF]/50 align-top">
                     <td className="px-4 py-3 font-mono text-xs tabular-nums whitespace-nowrap">
                       {r.tanggal}
@@ -922,6 +1003,8 @@ export function PrestasiModule({
 }) {
   const [records, setRecords] = useState<AchievementRecord[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
+  const [classes, setClasses] = useState<ClassRoom[]>([]);
+  const [filterClass, setFilterClass] = useState('');
   const [loading, setLoading] = useState(true);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<AchievementRecord | null>(null);
@@ -936,18 +1019,22 @@ export function PrestasiModule({
 
   const loadData = async () => {
     setLoading(true);
-    const [rRes, sRes] = await Promise.all([
+    const [rRes, sRes, cRes] = await Promise.all([
       callApi<AchievementRecord[]>('getAchievements'),
       callApi<Student[]>('getStudents'),
+      callApi<ClassRoom[]>('getClasses'),
     ]);
     setLoading(false);
     if (rRes.success && rRes.data) setRecords(rRes.data);
     if (sRes.success && sRes.data) setStudents(sRes.data);
+    if (cRes.success && cRes.data) setClasses(cRes.data);
   };
 
   useEffect(() => {
     loadData();
   }, []);
+
+  const filtered = records.filter((r) => !filterClass || r.id_kelas === filterClass);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -980,14 +1067,14 @@ export function PrestasiModule({
         actions={
           <>
             <SecondaryButton
-              disabled={records.length === 0}
+              disabled={filtered.length === 0}
               onClick={() =>
                 generatePdfReport({
                   orientation: 'portrait',
                   title: 'DAFTAR PRESTASI PESERTA DIDIK',
                   school,
                   headers: ['No', 'Tanggal', 'Siswa', 'Kelas', 'Prestasi', 'Jenis Lomba', 'Tingkat', 'Peringkat'],
-                  rows: records.map((r, i) => [
+                  rows: filtered.map((r, i) => [
                     i + 1,
                     r.tanggal,
                     r.nama_siswa,
@@ -1028,9 +1115,27 @@ export function PrestasiModule({
         }
       />
 
+      {user.role !== 'ORANG_TUA' && classes.length > 0 && (
+        <div className="bg-white border border-[#E5E7EB] rounded-xl p-4 flex flex-wrap items-center gap-3">
+          <label className="text-xs font-semibold text-[#1E1B4B]">Filter Kelas</label>
+          <select
+            value={filterClass}
+            onChange={(e) => setFilterClass(e.target.value)}
+            className="w-full sm:w-64 px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg bg-white"
+          >
+            <option value="">Semua Kelas</option>
+            {classes.map((c) => (
+              <option key={c.id_kelas} value={c.id_kelas}>
+                {c.nama_kelas}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {loading ? (
         <TableSkeleton cols={6} rows={4} />
-      ) : records.length === 0 ? (
+      ) : filtered.length === 0 ? (
         <EmptyState title="Belum ada data prestasi siswa" />
       ) : (
         <div className="bg-white border border-[#E5E7EB] rounded-xl overflow-hidden">
@@ -1047,7 +1152,7 @@ export function PrestasiModule({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E5E7EB]">
-                {records.map((r) => (
+                {filtered.map((r) => (
                   <tr key={r.id_prestasi} className="hover:bg-[#F5F3FF]/50">
                     <td className="px-4 py-3 font-mono text-xs tabular-nums whitespace-nowrap">
                       {r.tanggal}

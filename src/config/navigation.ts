@@ -162,7 +162,7 @@ export const NAV_GROUPS: NavGroup[] = [
       },
       {
         id: 'backup',
-        label: 'Backup Database',
+        label: 'Backup Data',
         roles: ['ADMIN'],
       },
     ],

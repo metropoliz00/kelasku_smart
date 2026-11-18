@@ -1,15 +1,20 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { Copy, Download, RefreshCw, RotateCcw } from 'lucide-react';
 import { canAccessMenu, ROLE_LABELS } from './config/navigation';
 import {
   callApi,
   enableLocalMode,
   getConfiguredGasUrl,
   getConnectionMode,
+  getDefaultGasUrl,
   getStoredSession,
+  resetGasUrlToDefault,
   setConfiguredGasUrl,
   setStoredSession,
+  validateGasWebAppUrl,
 } from './services/api';
-import { AuthUser, ConnectionMode, MenuId, SchoolIdentity, SessionData, ToastItem } from './types';
+import { AuthUser, ConnectionMode, DesktopUpdateStatus, MenuId, SchoolIdentity, SessionData, ToastItem } from './types';
+import { copyGasCodeToClipboard, downloadGasCodeFile } from './utils/gasCode';
 import { Header } from './components/Header';
 import { LoginPage } from './components/LoginPage';
 import { Sidebar } from './components/Sidebar';
@@ -88,6 +93,7 @@ export default function App() {
   const [profilePhoto, setProfilePhoto] = useState('');
   const [profileSaving, setProfileSaving] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [desktopUpdate, setDesktopUpdate] = useState<DesktopUpdateStatus | null>(null);
 
   const addToast = useCallback(
     (type: ToastItem['type'], title: string, message?: string) => {
@@ -126,6 +132,20 @@ export default function App() {
       }
     });
   }, [session?.token, loadSchoolIdentity]);
+
+  useEffect(() => {
+    if (!window.kelaskuDesktop?.onUpdateStatus) return;
+    return window.kelaskuDesktop.onUpdateStatus((status) => {
+      setDesktopUpdate(status);
+      if (status.status === 'downloaded') {
+        addToast(
+          'info',
+          `Pembaruan Desktop v${status.version || ''} Siap`,
+          'Klik "Pasang & Mulai Ulang" pada bilah atas untuk memperbarui aplikasi.'
+        );
+      }
+    });
+  }, [addToast]);
 
   const handleLogout = async () => {
     await callApi('logoutUser');
@@ -210,7 +230,7 @@ export default function App() {
       case 'absensi':
         return <AbsensiModule school={school} onToast={addToast} />;
       case 'rekap-absensi':
-        return <RekapAbsensiModule user={user} school={school} />;
+        return <RekapAbsensiModule user={user} school={school} onToast={addToast} />;
       case 'input-nilai':
         return <InputNilaiModule user={user} school={school} onToast={addToast} />;
       case 'rekap-nilai':
@@ -226,7 +246,7 @@ export default function App() {
       case 'prestasi':
         return <PrestasiModule user={user} school={school} onToast={addToast} />;
       case 'piket':
-        return <PiketModule user={user} onToast={addToast} />;
+        return <PiketModule user={user} school={school} onToast={addToast} />;
       case 'agenda':
         return <AgendaModule user={user} onToast={addToast} />;
       case 'penghubung':
@@ -257,6 +277,16 @@ export default function App() {
             onSchoolUpdated={() => {
               loadSchoolIdentity();
               setConnectionMode(getConnectionMode());
+            }}
+            onConnectionChanged={(requireRelogin) => {
+              setConnectionMode(getConnectionMode());
+              if (requireRelogin) {
+                setStoredSession(null);
+                setSession(null);
+                setActiveMenu('dashboard');
+              } else {
+                loadSchoolIdentity();
+              }
             }}
             onToast={addToast}
           />
@@ -310,6 +340,32 @@ export default function App() {
           onLogout={handleLogout}
         />
 
+        {window.kelaskuDesktop?.isDesktop &&
+          desktopUpdate &&
+          (desktopUpdate.status === 'available' ||
+            desktopUpdate.status === 'progress' ||
+            desktopUpdate.status === 'downloaded') && (
+            <div className="bg-[#F5F3FF] border-b border-[#DDD6FE] px-4 sm:px-6 py-2 flex flex-wrap items-center justify-between gap-2 text-xs text-[#4C1D95] no-print">
+              <div className="flex items-center gap-2 font-medium">
+                <RefreshCw
+                  className={`w-3.5 h-3.5 shrink-0 ${
+                    desktopUpdate.status !== 'downloaded' ? 'animate-spin' : ''
+                  }`}
+                />
+                <span>{desktopUpdate.message}</span>
+              </div>
+              {desktopUpdate.status === 'downloaded' && (
+                <button
+                  type="button"
+                  onClick={() => window.kelaskuDesktop?.installUpdate()}
+                  className="px-3 py-1 rounded-md bg-[#6D28D9] text-white font-semibold hover:bg-[#4C1D95] cursor-pointer"
+                >
+                  Pasang & Mulai Ulang
+                </button>
+              )}
+            </div>
+          )}
+
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1440px] w-full mx-auto">
           {renderModule()}
         </main>
@@ -320,8 +376,8 @@ export default function App() {
       <Modal
         open={connModalOpen}
         onClose={() => setConnModalOpen(false)}
-        title="Status Koneksi Database"
-        subtitle="Hubungkan ke Google Apps Script Web App sekolah atau gunakan Mode Browser Lokal."
+        title="Status Koneksi"
+        subtitle="Hubungkan ke layanan sekolah atau gunakan Mode Browser Lokal."
         maxWidth="max-w-lg"
       >
         <div className="space-y-4">
@@ -329,8 +385,8 @@ export default function App() {
             Mode aktif saat ini:{' '}
             <strong className="text-[#1E1B4B]">
               {connectionMode === 'GAS'
-                ? 'Terhubung ke Database (GAS Web App)'
-                : 'Mode Browser Lokal (Belum terhubung Database)'}
+                ? 'Terhubung ke Layanan Sekolah'
+                : 'Mode Browser Lokal'}
             </strong>
           </div>
           <div>
@@ -342,13 +398,69 @@ export default function App() {
               placeholder="https://script.google.com/macros/s/.../exec"
               className="w-full px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg"
             />
+            <p className="mt-1 text-[11px] text-[#64748B]">
+              Ganti URL Web App untuk menghubungkan aplikasi ke database Spreadsheet sekolah lain tanpa mengubah kode.
+            </p>
+          </div>
+          <div className="p-3 rounded-lg bg-[#F8FAFC] border border-[#E5E7EB] space-y-2">
+            <div className="text-xs font-semibold text-[#1E1B4B]">Skrip Layanan (Code.gs)</div>
+            <p className="text-xs text-[#64748B]">
+              Salin atau unduh file <code className="bg-slate-100 px-1 rounded">Code.gs</code> terbaru untuk ditempel di Google Apps Script.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <SecondaryButton
+                onClick={async () => {
+                  const ok = await copyGasCodeToClipboard();
+                  if (ok) addToast('success', 'Code.gs Disalin', 'Tempel ke editor Apps Script lalu Deploy New version.');
+                  else addToast('error', 'Gagal Menyalin', 'Gunakan tombol Unduh Code.gs.');
+                }}
+              >
+                <Copy className="w-3.5 h-3.5" />
+                Salin Code.gs
+              </SecondaryButton>
+              <SecondaryButton
+                onClick={() => {
+                  downloadGasCodeFile();
+                  addToast('success', 'Code.gs Diunduh', 'File Code.gs siap ditempel ke Apps Script.');
+                }}
+              >
+                <Download className="w-3.5 h-3.5" />
+                Unduh Code.gs
+              </SecondaryButton>
+            </div>
           </div>
           <div className="flex flex-wrap gap-2 justify-end pt-2 border-t border-[#E5E7EB]">
+            {getDefaultGasUrl() && (
+              <SecondaryButton
+                onClick={() => {
+                  const prevUrl = getConfiguredGasUrl();
+                  const def = resetGasUrlToDefault();
+                  setGasUrlInput(def);
+                  setConnectionMode(getConnectionMode());
+                  setConnModalOpen(false);
+                  if (def !== prevUrl) {
+                    setStoredSession(null);
+                    setSession(null);
+                    setActiveMenu('dashboard');
+                  }
+                  addToast('info', 'URL Apps Script direset ke bawaan');
+                }}
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                Reset Bawaan
+              </SecondaryButton>
+            )}
             <SecondaryButton
               onClick={() => {
+                const prevMode = getConnectionMode();
                 enableLocalMode();
                 setConnectionMode(getConnectionMode());
                 setConnModalOpen(false);
+                if (prevMode !== 'LOCAL') {
+                  setStoredSession(null);
+                  setSession(null);
+                  setActiveMenu('dashboard');
+                }
                 addToast('info', 'Mode Browser Lokal aktif');
               }}
             >
@@ -356,14 +468,27 @@ export default function App() {
             </SecondaryButton>
             <PrimaryButton
               onClick={() => {
-                if (!gasUrlInput.trim()) {
-                  addToast('warning', 'Masukkan URL Web App GAS terlebih dahulu');
+                const check = validateGasWebAppUrl(gasUrlInput);
+                if (!check.valid) {
+                  addToast('warning', 'URL Tidak Valid', check.message);
                   return;
                 }
-                setConfiguredGasUrl(gasUrlInput);
+                const prevUrl = getConfiguredGasUrl();
+                setConfiguredGasUrl(check.cleaned);
                 setConnectionMode(getConnectionMode());
                 setConnModalOpen(false);
-                addToast('success', 'URL Google Apps Script diperbarui');
+                if (check.cleaned !== prevUrl) {
+                  setStoredSession(null);
+                  setSession(null);
+                  setActiveMenu('dashboard');
+                  addToast(
+                    'success',
+                    'URL Google Apps Script diperbarui',
+                    'Silakan masuk menggunakan akun pada database sekolah yang baru.'
+                  );
+                } else {
+                  addToast('success', 'URL Google Apps Script tersimpan');
+                }
               }}
             >
               Simpan URL GAS
@@ -377,15 +502,17 @@ export default function App() {
         open={profileOpen}
         onClose={() => setProfileOpen(false)}
         title="Profil & Foto Akun"
-        subtitle="Foto akun disimpan sebagai Base64 di database. Jika belum ada foto, avatar otomatis ditampilkan."
+        subtitle="Unggah foto profil akun Anda. Jika belum ada foto, inisial nama otomatis ditampilkan."
         maxWidth="max-w-lg"
       >
         <div className="space-y-4">
           <div className="flex items-center gap-3.5 p-3.5 bg-[#F8FAFC] border border-[#E5E7EB] rounded-xl">
-            <UserAvatar src={profilePhoto} name={user.nama_lengkap} size="lg" />
+            <UserAvatar src={profilePhoto} name={user.nama_lengkap} size="lg" className="shrink-0" />
             <div className="min-w-0">
-              <div className="text-sm font-bold text-[#1E1B4B] truncate">{user.nama_lengkap}</div>
-              <div className="text-xs text-[#64748B] font-mono truncate">@{user.username}</div>
+              <div className="text-sm font-bold text-[#1E1B4B] whitespace-normal break-words leading-snug">
+                {user.nama_lengkap}
+              </div>
+              <div className="text-xs text-[#64748B] font-mono break-all">@{user.username}</div>
               <div className="text-xs font-semibold text-[#6D28D9] mt-0.5">
                 {ROLE_LABELS[user.role]}
               </div>
@@ -417,7 +544,7 @@ export default function App() {
                   setStoredSession(nextSession);
                   setSession(nextSession);
                   setProfileOpen(false);
-                  addToast('success', 'Foto Profil Disimpan', 'Foto akun berhasil diperbarui di database.');
+                  addToast('success', 'Foto Profil Disimpan', 'Foto akun berhasil diperbarui.');
                 } else {
                   addToast('error', 'Gagal Menyimpan Profil', res.message);
                 }

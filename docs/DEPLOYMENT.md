@@ -107,3 +107,22 @@ Jika ingin membangun folder statis sendiri lalu meng-upload hasil build ke branc
   Pastikan saat Deploy Web App di Google Apps Script opsi **Who has access** dipilih **Anyone**, dan URL yang ditempel berakhiran `/exec` (bukan `/dev`).
 - **Workflow GitHub Actions gagal karena izin Pages:**  
   Pastikan di GitHub **Settings → Pages → Source** sudah dipilih **GitHub Actions**, dan pada **Settings → Actions → General → Workflow permissions** diizinkan membaca/menulis sesuai konfigurasi workflow.
+
+---
+
+## Bagian 4: Aplikasi Desktop Windows (.exe) & Pembaruan Otomatis
+
+Aplikasi ini juga dilengkapi wrapper desktop **Electron** untuk menghasilkan file **`.exe` Windows** (baik **Installer `KELASKU SMART-Setup-*.exe`** dengan auto-update maupun **`KELASKU SMART-Portable-*.exe`**).
+
+### 1. Cara Mengganti URL Apps Script Tanpa Mengubah Kode
+Pengguna atau sekolah lain dapat menghubungkan aplikasi (web maupun `.exe`) ke Google Apps Script milik sendiri melalui salah satu cara berikut:
+- **Halaman Login:** Klik tombol **Ganti / Atur Apps Script** di bawah tombol Masuk.
+- **Header Atas:** Setelah login, klik tombol **Apps Script / Mode Lokal** di pojok kanan atas.
+- **Menu Pengaturan Sekolah:** Buka **Pengaturan Sekolah → Koneksi Database & URL Google Apps Script**.
+- **File Samping `.exe` (Opsional untuk Desktop):** Buat file teks `appscript-url.txt` di folder yang sama dengan file `.exe`, lalu tempel URL Web App `/exec` pada baris pertama.
+
+### 2. Build & Pembaruan File `.exe` Otomatis
+- **Otomatis via GitHub Actions:** Workflow `.github/workflows/build-desktop.yml` otomatis berjalan di `windows-latest` setiap kali ada pembaruan kode (`push` ke GitHub atau tag `v*`). Workflow menaikkan nomor versi secara otomatis (`1.0.<run_number>`), mempublikasikan file `.exe` terbaru + `latest.yml` ke **GitHub Releases**, serta menyimpannya di tab **Actions → Artifacts**.
+- **Pembaruan Otomatis di Komputer Pengguna:** Untuk pengguna yang memakai installer `KELASKU SMART-Setup-*.exe`, aplikasi otomatis memeriksa rilis terbaru saat dibuka (atau melalui tombol **Cek Pembaruan**), mengunduh versi baru di latar belakang, dan menampilkan tombol **Pasang & Mulai Ulang**.
+- **Build Lokal di Windows:** Jalankan `npm install` lalu `npm run desktop:build` untuk menghasilkan file `.exe` di folder `release/`.
+

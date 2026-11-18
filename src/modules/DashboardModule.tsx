@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -24,7 +24,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { callApi } from '../services/api';
-import { AuthUser, DashboardSummary, MenuId, SchoolIdentity } from '../types';
+import { AuthUser, ClassRoom, DashboardSummary, MenuId, SchoolIdentity, Student } from '../types';
 import { EmptyState, PageHeader, SecondaryButton } from '../components/UI';
 
 ChartJS.register(
@@ -51,22 +51,37 @@ export function DashboardModule({
   onToast: (type: 'success' | 'error' | 'warning' | 'info', title: string, message?: string) => void;
 }) {
   const [data, setData] = useState<DashboardSummary | null>(null);
+  const [classes, setClasses] = useState<ClassRoom[]>([]);
+  const [students, setStudents] = useState<Student[]>([]);
+  const [selectedClassId, setSelectedClassId] = useState('');
   const [loading, setLoading] = useState(true);
 
-  const loadDashboard = async () => {
+  const loadDashboard = async (classId = selectedClassId) => {
     setLoading(true);
-    const res = await callApi<DashboardSummary>('getDashboard');
+    const [dRes, cRes, sRes] = await Promise.all([
+      callApi<DashboardSummary>('getDashboard', classId ? { id_kelas: classId } : {}),
+      user.role !== 'ORANG_TUA'
+        ? callApi<ClassRoom[]>('getClasses')
+        : Promise.resolve({ success: true, message: 'OK', data: [] as ClassRoom[] }),
+      callApi<Student[]>('getStudents'),
+    ]);
     setLoading(false);
-    if (res.success && res.data) {
-      setData(res.data);
+    if (dRes.success && dRes.data) {
+      setData(dRes.data);
     } else {
-      onToast('error', 'Gagal memuat dashboard', res.message);
+      onToast('error', 'Gagal memuat dashboard', dRes.message);
+    }
+    if (cRes.success && cRes.data) {
+      setClasses(cRes.data);
+    }
+    if (sRes.success && sRes.data) {
+      setStudents(sRes.data);
     }
   };
 
   useEffect(() => {
-    loadDashboard();
-  }, []);
+    loadDashboard(selectedClassId);
+  }, [selectedClassId]);
 
   const kpiCards = [
     {
@@ -111,8 +126,100 @@ export function DashboardModule({
     },
   ];
 
+  const classGenderBreakdown = useMemo(() => {
+    const items = data?.siswa_per_kelas || [];
+    const normCls = (v?: string) => String(v || '').trim().replace(/\s+/g, ' ').toLowerCase();
+    const compactCls = (v?: string) => String(v || '').trim().replace(/[^a-z0-9]/gi, '').toLowerCase();
+    const detectGender = (v?: string): 'L' | 'P' | '' => {
+      const g = String(v || '').trim().toLowerCase();
+      if (!g) return '';
+      if (g === 'l' || g === 'lk' || g.startsWith('laki') || g === 'pria' || g === 'male' || g === 'm') {
+        return 'L';
+      }
+      if (g === 'p' || g === 'pr' || g.startsWith('perempuan') || g === 'wanita' || g === 'female' || g === 'f') {
+        return 'P';
+      }
+      return '';
+    };
+
+    return items.map((c) => {
+      if (typeof c.jumlah_l === 'number' && typeof c.jumlah_p === 'number') {
+        return {
+          nama_kelas: c.nama_kelas,
+          jumlahL: c.jumlah_l,
+          jumlahP: c.jumlah_p,
+          total: c.jumlah || c.jumlah_l + c.jumlah_p,
+        };
+      }
+      const clsObj = classes.find((cl) => normCls(cl.nama_kelas) === normCls(c.nama_kelas));
+      const targetId = String(clsObj?.id_kelas || '').trim();
+      const targetNorm = normCls(c.nama_kelas);
+      const targetComp = compactCls(c.nama_kelas);
+      let jumlahL = 0;
+      let jumlahP = 0;
+      students.forEach((s) => {
+        const sId = String(s.id_kelas || '').trim();
+        const matchId = targetId && sId === targetId;
+        const matchName =
+          (targetNorm && normCls(s.nama_kelas) === targetNorm) ||
+          (targetComp && compactCls(s.nama_kelas) === targetComp);
+        if (!matchId && !matchName) return;
+        const g = detectGender(s.jenis_kelamin);
+        if (g === 'L') jumlahL++;
+        else if (g === 'P') jumlahP++;
+      });
+      return {
+        nama_kelas: c.nama_kelas,
+        jumlahL,
+        jumlahP,
+        total: c.jumlah || jumlahL + jumlahP,
+      };
+    });
+  }, [data?.siswa_per_kelas, classes, students]);
+
+  const totalClassL = useMemo(
+    () => classGenderBreakdown.reduce((acc, item) => acc + item.jumlahL, 0),
+    [classGenderBreakdown]
+  );
+  const totalClassP = useMemo(
+    () => classGenderBreakdown.reduce((acc, item) => acc + item.jumlahP, 0),
+    [classGenderBreakdown]
+  );
+
+  const activeRombelClass = useMemo(() => {
+    if (selectedClassId) {
+      return classes.find((c) => c.id_kelas === selectedClassId);
+    }
+    if (user.role === 'GURU' && classes.length === 1) {
+      return classes[0];
+    }
+    return undefined;
+  }, [selectedClassId, user.role, classes]);
+
+  const getClassIdentityStyle = (cls: ClassRoom) => {
+    const levelStr = String(cls.tingkat || cls.nama_kelas || '').match(/\d+/)?.[0] || '';
+    const levelNum = levelStr ? Number(levelStr) : 0;
+    const palettes = [
+      { bg: 'bg-[#EDE9FE]', text: 'text-[#4C1D95]', border: 'border-[#C4B5FD]', dot: 'bg-[#6D28D9]' },
+      { bg: 'bg-emerald-50', text: 'text-emerald-800', border: 'border-emerald-200', dot: 'bg-emerald-600' },
+      { bg: 'bg-sky-50', text: 'text-sky-800', border: 'border-sky-200', dot: 'bg-sky-600' },
+      { bg: 'bg-amber-50', text: 'text-amber-800', border: 'border-amber-200', dot: 'bg-amber-500' },
+      { bg: 'bg-indigo-50', text: 'text-indigo-800', border: 'border-indigo-200', dot: 'bg-indigo-600' },
+      { bg: 'bg-rose-50', text: 'text-rose-800', border: 'border-rose-200', dot: 'bg-rose-600' },
+    ];
+    if (levelNum === 5) return palettes[0];
+    if (levelNum >= 1 && levelNum <= 4) return palettes[levelNum];
+    if (levelNum === 6) return palettes[5];
+    const name = String(cls.nama_kelas || '');
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) {
+      hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+    }
+    return palettes[hash % palettes.length];
+  };
+
   const hasAttendanceData = (data?.kehadiran_chart || []).some((k) => k.jumlah > 0);
-  const hasClassData = (data?.siswa_per_kelas || []).length > 0;
+  const hasClassData = classGenderBreakdown.length > 0;
   const hasGradeData = (data?.perkembangan_nilai || []).length > 0;
   const hasAchievementData = (data?.prestasi_chart || []).length > 0;
 
@@ -121,25 +228,56 @@ export function DashboardModule({
       <PageHeader
         title="Dashboard Utama"
         description={
-          school?.nama_sekolah
-            ? `${school.nama_sekolah} · Tahun Ajaran ${school.tahun_ajaran_aktif || '-'} (${school.semester_aktif})`
-            : 'Ringkasan data aktual sekolah dari database.'
+          <span className="inline-flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+            <span>
+              {school?.nama_sekolah || 'Ringkasan data aktual sekolah.'}
+            </span>
+            {activeRombelClass && (() => {
+              const style = getClassIdentityStyle(activeRombelClass);
+              return (
+                <span
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg border text-xs font-semibold shadow-2xs ${style.bg} ${style.text} ${style.border}`}
+                >
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${style.dot}`} aria-hidden="true" />
+                  <School className="w-3.5 h-3.5 shrink-0" />
+                  <span>Rombel: {activeRombelClass.nama_kelas}</span>
+                </span>
+              );
+            })()}
+          </span>
         }
         actions={
-          <SecondaryButton onClick={loadDashboard} disabled={loading}>
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            Muat Ulang
-          </SecondaryButton>
+          <>
+            {user.role !== 'ORANG_TUA' && classes.length > 1 && (
+              <select
+                value={selectedClassId}
+                onChange={(e) => setSelectedClassId(e.target.value)}
+                aria-label="Filter Kelas Dashboard"
+                className="px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg bg-white text-[#1E1B4B] focus:outline-none focus:ring-2 focus:ring-[#6D28D9]"
+              >
+                <option value="">Semua Kelas</option>
+                {classes.map((c) => (
+                  <option key={c.id_kelas} value={c.id_kelas}>
+                    {c.nama_kelas}
+                  </option>
+                ))}
+              </select>
+            )}
+            <SecondaryButton onClick={() => loadDashboard(selectedClassId)} disabled={loading}>
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              Muat Ulang
+            </SecondaryButton>
+          </>
         }
       />
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-        {kpiCards.map((card) => {
+        {kpiCards.map((card, idx) => {
           const Icon = card.icon;
           return (
             <div
-              key={card.label}
+              key={`${card.label}-${idx}`}
               className="bg-white border border-[#E5E7EB] rounded-xl p-4 shadow-[0_1px_2px_rgba(30,27,75,0.04)] hover:border-[#6D28D9]/40 transition-colors"
             >
               <div className="flex items-center justify-between gap-2">
@@ -160,30 +298,81 @@ export function DashboardModule({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Siswa per Kelas */}
         <div className="bg-white border border-[#E5E7EB] rounded-xl p-5">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-wrap items-start justify-between gap-2 mb-4">
             <div>
               <h2 className="text-base font-bold text-[#1E1B4B]">Jumlah Siswa per Kelas</h2>
-              <p className="text-xs text-[#64748B]">Dihitung dari data siswa dan kelas aktual</p>
+              <p className="text-xs text-[#64748B]">
+                Perbandingan siswa Laki-laki (L) dan Perempuan (P) tiap kelas
+              </p>
             </div>
+            {hasClassData && (
+              <div className="flex items-center gap-3 text-xs font-medium tabular-nums">
+                <span className="inline-flex items-center gap-1.5 text-[#1D4ED8]">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#2563EB]" aria-hidden="true" />
+                  L: {totalClassL}
+                </span>
+                <span className="inline-flex items-center gap-1.5 text-[#BE185D]">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#EC4899]" aria-hidden="true" />
+                  P: {totalClassP}
+                </span>
+                <span className="text-[#64748B]">
+                  · Total: {totalClassL + totalClassP}
+                </span>
+              </div>
+            )}
           </div>
           {hasClassData ? (
             <div className="h-64">
               <Bar
                 data={{
-                  labels: data!.siswa_per_kelas.map((c) => c.nama_kelas),
+                  labels: classGenderBreakdown.map((c) => c.nama_kelas),
                   datasets: [
                     {
-                      label: 'Jumlah Siswa',
-                      data: data!.siswa_per_kelas.map((c) => c.jumlah),
-                      backgroundColor: '#6D28D9',
+                      label: 'Laki-laki (L)',
+                      data: classGenderBreakdown.map((c) => c.jumlahL),
+                      backgroundColor: '#2563EB',
+                      hoverBackgroundColor: '#1D4ED8',
                       borderRadius: 6,
+                      barPercentage: 0.78,
+                      categoryPercentage: 0.72,
+                    },
+                    {
+                      label: 'Perempuan (P)',
+                      data: classGenderBreakdown.map((c) => c.jumlahP),
+                      backgroundColor: '#EC4899',
+                      hoverBackgroundColor: '#DB2777',
+                      borderRadius: 6,
+                      barPercentage: 0.78,
+                      categoryPercentage: 0.72,
                     },
                   ],
                 }}
                 options={{
                   responsive: true,
                   maintainAspectRatio: false,
-                  plugins: { legend: { display: false } },
+                  interaction: { mode: 'index', intersect: false },
+                  plugins: {
+                    legend: {
+                      display: true,
+                      position: 'top',
+                      labels: {
+                        usePointStyle: true,
+                        pointStyle: 'circle',
+                        boxWidth: 8,
+                        padding: 14,
+                        font: { size: 11 },
+                      },
+                    },
+                    tooltip: {
+                      callbacks: {
+                        label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y ?? 0} siswa`,
+                        footer: (items) => {
+                          const total = items.reduce((acc, it) => acc + (it.parsed.y ?? 0), 0);
+                          return `Total Kelas: ${total} siswa`;
+                        },
+                      },
+                    },
+                  },
                   scales: {
                     y: { beginAtZero: true, ticks: { precision: 0 } },
                   },
@@ -221,7 +410,7 @@ export function DashboardModule({
                   datasets: [
                     {
                       data: data!.kehadiran_chart.map((k) => k.jumlah),
-                      backgroundColor: ['#16A34A', '#2563EB', '#F59E0B', '#DC2626', '#6D28D9'],
+                      backgroundColor: ['#16A34A', '#2563EB', '#F59E0B', '#DC2626'],
                       borderWidth: 1,
                     },
                   ],
@@ -392,8 +581,8 @@ export function DashboardModule({
             </div>
             {data?.aktivitas_terbaru && data.aktivitas_terbaru.length > 0 ? (
               <div className="divide-y divide-[#E5E7EB]">
-                {data.aktivitas_terbaru.map((log) => (
-                  <div key={log.id_log} className="py-2.5 flex items-start justify-between gap-3">
+                {data.aktivitas_terbaru.map((log, idx) => (
+                  <div key={`${log.id_log}-${idx}`} className="py-2.5 flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="text-sm text-[#1E1B4B]">
                         <span className="font-semibold">{log.username}</span> · {log.detail}
