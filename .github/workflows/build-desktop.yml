@@ -29,32 +29,24 @@ jobs:
         with:
           node-version: 22
 
-      - name: Aktifkan Windows Developer Mode (symlink support)
-        shell: pwsh
-        run: |
-          try {
-            Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" -Name "AllowDevelopmentWithoutDevLicense" -Value 1 -ErrorAction SilentlyContinue
-          } catch {
-            Write-Host "Skip Developer Mode registry update"
-          }
-
       - name: Konfigurasi Git Identity
-        shell: pwsh
+        shell: cmd
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Install dependensi
-        shell: pwsh
-        run: |
-          npm install --legacy-peer-deps --no-audit --no-fund
+        shell: cmd
+        run: npm install --legacy-peer-deps --no-audit --no-fund
 
       - name: Cek tipe TypeScript
+        shell: cmd
         run: npm run lint
 
       - name: Tetapkan versi rilis otomatis untuk pembaruan .exe
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $pkg = Get-Content package.json -Raw | ConvertFrom-Json
           $baseParts = ($pkg.version -split '\.')
           $major = if ($baseParts.Count -ge 1 -and $baseParts[0] -match '^\d+$') { $baseParts[0] } else { "1" }
@@ -73,21 +65,26 @@ jobs:
             $nextVer = "$major.$minor.$env:GITHUB_RUN_NUMBER"
           }
           Write-Host "Membangun installer desktop versi: $nextVer"
-          npm version $nextVer --no-git-tag-version --allow-same-version
+          npm.cmd version $nextVer --no-git-tag-version --allow-same-version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Add-Content -Path $env:GITHUB_ENV -Value "RELEASE_VERSION=$nextVer"
 
-      - name: Build frontend & paket installer Windows (.exe)
-        shell: pwsh
+      - name: Build frontend (Vite)
+        shell: cmd
         env:
           VITE_GAS_WEB_APP_URL: ${{ vars.VITE_GAS_WEB_APP_URL }}
+        run: npm run build
+
+      - name: Kemas installer Windows (.exe)
+        shell: cmd
+        env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: |
-          npx vite build
-          if (Test-Path "electron/icon.ico") {
+          if exist electron\icon.ico (
             npx electron-builder --win --publish never -c.win.signExecutable=false -c.forceCodeSigning=false -c.npmRebuild=false
-          } else {
+          ) else (
             npx electron-builder --win --publish never -c.win.icon=electron/icon.png -c.win.signExecutable=false -c.forceCodeSigning=false -c.npmRebuild=false
-          }
+          )
 
       - name: Tampilkan daftar file hasil build (.exe)
         shell: pwsh
