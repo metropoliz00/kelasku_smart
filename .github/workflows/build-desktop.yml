@@ -29,6 +29,15 @@ jobs:
         with:
           node-version: 22
 
+      - name: Aktifkan Windows Developer Mode (symlink support)
+        shell: pwsh
+        run: |
+          try {
+            Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" -Name "AllowDevelopmentWithoutDevLicense" -Value 1 -ErrorAction SilentlyContinue
+          } catch {
+            Write-Host "Skip Developer Mode registry update"
+          }
+
       - name: Konfigurasi Git Identity
         shell: pwsh
         run: |
@@ -48,10 +57,18 @@ jobs:
         run: |
           $pkg = Get-Content package.json -Raw | ConvertFrom-Json
           $baseParts = ($pkg.version -split '\.')
-          $major = if ($baseParts.Count -ge 1) { $baseParts[0] } else { "1" }
-          $minor = if ($baseParts.Count -ge 2) { $baseParts[1] } else { "0" }
+          $major = if ($baseParts.Count -ge 1 -and $baseParts[0] -match '^\d+$') { $baseParts[0] } else { "1" }
+          $minor = if ($baseParts.Count -ge 2 -and $baseParts[1] -match '^\d+$') { $baseParts[1] } else { "0" }
           if ($env:GITHUB_REF -like "refs/tags/v*") {
-            $nextVer = $env:GITHUB_REF_NAME.TrimStart('v')
+            $rawTag = $env:GITHUB_REF_NAME.TrimStart('v')
+            $tagParts = ($rawTag -split '\.')
+            if ($tagParts.Count -ge 3) {
+              $nextVer = "$($tagParts[0]).$($tagParts[1]).$($tagParts[2])"
+            } elseif ($tagParts.Count -eq 2) {
+              $nextVer = "$($tagParts[0]).$($tagParts[1]).0"
+            } else {
+              $nextVer = "$major.$minor.$env:GITHUB_RUN_NUMBER"
+            }
           } else {
             $nextVer = "$major.$minor.$env:GITHUB_RUN_NUMBER"
           }
@@ -60,9 +77,17 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "RELEASE_VERSION=$nextVer"
 
       - name: Build frontend & paket installer Windows (.exe)
+        shell: pwsh
         env:
           VITE_GAS_WEB_APP_URL: ${{ vars.VITE_GAS_WEB_APP_URL }}
-        run: npm run desktop:build
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          npx vite build
+          if (Test-Path "electron/icon.ico") {
+            npx electron-builder --win --publish never -c.win.signExecutable=false -c.forceCodeSigning=false -c.npmRebuild=false
+          } else {
+            npx electron-builder --win --publish never -c.win.icon=electron/icon.png -c.win.signExecutable=false -c.forceCodeSigning=false -c.npmRebuild=false
+          }
 
       - name: Tampilkan daftar file hasil build (.exe)
         shell: pwsh
